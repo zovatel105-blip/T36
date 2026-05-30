@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import AppConfig from '../config/config';
 import { addictionAPI, behaviorTracker } from '../services/addictionApi';
 import { useAuth } from './AuthContext';
@@ -264,25 +264,18 @@ export const AddictionProvider = ({ children }) => {
     return Math.max(0, Math.min(100, (currentProgress / totalNeeded) * 100));
   };
 
-  const value = {
-    // User Data
+  const value = useMemo(() => ({
     userProfile,
     userAchievements,
     userStreaks,
-    
-    // Metrics
     addictionScore,
     level,
     xp,
     streak,
     dopamineHits,
-    
-    // Social & FOMO
     fomoContent,
     leaderboard,
     socialProofData,
-    
-    // UI States
     showRewardPopup,
     rewardData,
     showLevelUp,
@@ -290,26 +283,23 @@ export const AddictionProvider = ({ children }) => {
     achievementData,
     showJackpot,
     jackpotData,
-    
-    // Actions
     trackAction,
     getSocialProof,
     refreshUserData,
     triggerJackpot,
-    
-    // Progress
     getXpToNextLevel,
     getXpProgress,
-    
-    // UI Controls
     setShowRewardPopup,
     setShowLevelUp,
     setShowAchievement,
     setShowJackpot,
-    
-    // Authentication aware
     isAuthenticated
-  };
+  }), [userProfile, userAchievements, userStreaks, addictionScore, level, xp, streak,
+      dopamineHits, fomoContent, leaderboard, socialProofData, showRewardPopup, rewardData,
+      showLevelUp, showAchievement, achievementData, showJackpot, jackpotData,
+      trackAction, getSocialProof, refreshUserData, triggerJackpot,
+      getXpToNextLevel, getXpProgress, isAuthenticated,
+      setShowRewardPopup, setShowLevelUp, setShowAchievement, setShowJackpot]);
 
   return (
     <AddictionContext.Provider value={value}>

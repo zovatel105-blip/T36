@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 
 const TikTokContext = createContext();
 
@@ -16,61 +16,61 @@ export const TikTokProvider = ({ children }) => {
   const [hideBottomNav, setHideBottomNav] = useState(false);
   const [commentInputConfig, setCommentInputConfig] = useState(null);
 
-  const enterTikTokMode = () => {
+  const enterTikTokMode = useCallback(() => {
     setIsTikTokMode(true);
-    // Prevent body scroll when in TikTok mode
     document.body.style.overflow = 'hidden';
-  };
+  }, []);
 
-  const exitTikTokMode = () => {
+  const exitTikTokMode = useCallback(() => {
     setIsTikTokMode(false);
     setHideRightNavigation(false);
     setHideBottomNav(false);
-    // Restore body scroll
     document.body.style.overflow = 'auto';
-  };
+  }, []);
 
-  const toggleTikTokMode = () => {
+  const toggleTikTokMode = useCallback(() => {
     if (isTikTokMode) {
       exitTikTokMode();
     } else {
       enterTikTokMode();
     }
-  };
+  }, [isTikTokMode, enterTikTokMode, exitTikTokMode]);
 
-  const hideRightNavigationBar = () => {
+  const hideRightNavigationBar = useCallback(() => {
     setHideRightNavigation(true);
-  };
+  }, []);
 
-  const showRightNavigationBar = () => {
+  const showRightNavigationBar = useCallback(() => {
     setHideRightNavigation(false);
-  };
+  }, []);
 
-  const hideBottomNavigationBar = () => {
+  const hideBottomNavigationBar = useCallback(() => {
     setHideBottomNav(true);
-  };
+  }, []);
 
-  const showBottomNavigationBar = () => {
+  const showBottomNavigationBar = useCallback(() => {
     setHideBottomNav(false);
-  };
+  }, []);
+
+  const value = useMemo(() => ({
+    isTikTokMode,
+    hideRightNavigation,
+    hideBottomNav,
+    commentInputConfig,
+    setCommentInputConfig,
+    enterTikTokMode,
+    exitTikTokMode,
+    toggleTikTokMode,
+    hideRightNavigationBar,
+    showRightNavigationBar,
+    hideBottomNavigationBar,
+    showBottomNavigationBar
+  }), [isTikTokMode, hideRightNavigation, hideBottomNav, commentInputConfig, setCommentInputConfig,
+      enterTikTokMode, exitTikTokMode, toggleTikTokMode, hideRightNavigationBar, showRightNavigationBar,
+      hideBottomNavigationBar, showBottomNavigationBar]);
 
   return (
-    <TikTokContext.Provider 
-      value={{
-        isTikTokMode,
-        hideRightNavigation,
-        hideBottomNav,
-        commentInputConfig,
-        setCommentInputConfig,
-        enterTikTokMode,
-        exitTikTokMode,
-        toggleTikTokMode,
-        hideRightNavigationBar,
-        showRightNavigationBar,
-        hideBottomNavigationBar,
-        showBottomNavigationBar
-      }}
-    >
+    <TikTokContext.Provider value={value}>
       {children}
     </TikTokContext.Provider>
   );

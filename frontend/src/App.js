@@ -1,41 +1,39 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense, lazy } from "react";
 import "./App.css";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import ResponsiveLayout from './components/ResponsiveLayout';
 import FeedPage from './pages/FeedPage';
-import FeedV2Page from './pages/FeedV2Page';
-import ExplorePage from './pages/ExplorePage';
-// Demo pages removed - using real implementations only
-import ProfilePage from './pages/ProfilePage';
-import NotificationsPage from './pages/NotificationsPage';
-import MessagesPage from './pages/MessagesPage';
-import MessagesMainPage from './pages/messages/MessagesMainPage';
-import FollowersPage from './pages/messages/FollowersPage';
-import ActivityPage from './pages/messages/ActivityPage';
-import RequestsPage from './pages/messages/RequestsPage';
-import SettingsPage from './pages/SettingsPage';
-import EditProfilePage from './pages/EditProfilePage';
-import ChangePasswordPage from './pages/ChangePasswordPage';
-import AudioDetailPage from './pages/AudioDetailPage';
-import SearchPage from './pages/SearchPage';
-// ContentSelectionPage hidden in MVP VS-only — /create redirects to /content-creation in VS mode
-// import ContentSelectionPage from './pages/ContentSelectionPage';
-import ContentCreationPage from './pages/ContentCreationPage';
-import ContentPublishPage from './pages/ContentPublishPage';
-// VSCreatePage removed in MVP — VS creation now happens via ContentCreationPage with creationMode='vs'
-import VSExperiencePage from './pages/VSExperiencePage';
-import MomentCreationPage from './pages/MomentCreationPage';
-import FollowingPage from './pages/FollowingPage';
-import AuthPage from './pages/AuthPage';
-import StoryCapturePage from './pages/StoryCapturePage';
-import StoryEditPage from './pages/StoryEditPage';
-import CompletedBattlesPage from './pages/CompletedBattlesPage';
-import ActiveChallengesPage from './pages/ActiveChallengesPage';
-import ChallengeCreationPage from './pages/ChallengeCreationPage';
-import PostViewerPage from './pages/PostViewerPage';
-import LivePage from './pages/LivePage';
-import LiveViewerPage from './pages/LiveViewerPage';
-import LiveBroadcastPage from './pages/LiveBroadcastPage';
+
+// 🚀 LAZY LOAD: todas las páginas secundarias se cargan bajo demanda
+const FeedV2Page = lazy(() => import('./pages/FeedV2Page'));
+const ExplorePage = lazy(() => import('./pages/ExplorePage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
+const MessagesPage = lazy(() => import('./pages/MessagesPage'));
+const MessagesMainPage = lazy(() => import('./pages/messages/MessagesMainPage'));
+const FollowersPage = lazy(() => import('./pages/messages/FollowersPage'));
+const ActivityPage = lazy(() => import('./pages/messages/ActivityPage'));
+const RequestsPage = lazy(() => import('./pages/messages/RequestsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const EditProfilePage = lazy(() => import('./pages/EditProfilePage'));
+const ChangePasswordPage = lazy(() => import('./pages/ChangePasswordPage'));
+const AudioDetailPage = lazy(() => import('./pages/AudioDetailPage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const ContentCreationPage = lazy(() => import('./pages/ContentCreationPage'));
+const ContentPublishPage = lazy(() => import('./pages/ContentPublishPage'));
+const VSExperiencePage = lazy(() => import('./pages/VSExperiencePage'));
+const MomentCreationPage = lazy(() => import('./pages/MomentCreationPage'));
+const FollowingPage = lazy(() => import('./pages/FollowingPage'));
+const AuthPage = lazy(() => import('./pages/AuthPage'));
+const StoryCapturePage = lazy(() => import('./pages/StoryCapturePage'));
+const StoryEditPage = lazy(() => import('./pages/StoryEditPage'));
+const CompletedBattlesPage = lazy(() => import('./pages/CompletedBattlesPage'));
+const ActiveChallengesPage = lazy(() => import('./pages/ActiveChallengesPage'));
+const ChallengeCreationPage = lazy(() => import('./pages/ChallengeCreationPage'));
+const PostViewerPage = lazy(() => import('./pages/PostViewerPage'));
+const LivePage = lazy(() => import('./pages/LivePage'));
+const LiveViewerPage = lazy(() => import('./pages/LiveViewerPage'));
+const LiveBroadcastPage = lazy(() => import('./pages/LiveBroadcastPage'));
 import { Toaster } from './components/ui/toaster';
 // Mock data imports removed - using real backend services
 import { useToast } from './hooks/use-toast';
@@ -243,7 +241,8 @@ function AppContent() {
 
   return (
     <ResponsiveLayout onCreatePoll={handleCreatePoll}>
-      <Routes>
+      <Suspense fallback={<div className="flex items-center justify-center h-screen bg-black"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-pink-500" /></div>}>
+        <Routes>
         {/* Redirect root to feed */}
         <Route path="/" element={<Navigate to="/feed" replace />} />
         <Route path="/feed" element={<FeedPage />} />
@@ -288,7 +287,8 @@ function AppContent() {
         <Route path="/live" element={<LivePage />} />
         <Route path="/live/broadcast/:roomId" element={<LiveBroadcastPage />} />
         <Route path="/live/:roomId" element={<LiveViewerPage />} />
-      </Routes>
+        </Routes>
+      </Suspense>
     </ResponsiveLayout>
   );
 }

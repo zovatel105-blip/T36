@@ -42,14 +42,14 @@ try:
     OPENCV_AVAILABLE = True
 except ImportError:
     OPENCV_AVAILABLE = False
-    print("⚠️  OpenCV not available - video processing disabled")
+    logger.info("⚠️  OpenCV not available - video processing disabled")
 
 try:
     import numpy as np
     NUMPY_AVAILABLE = True
 except ImportError:
     NUMPY_AVAILABLE = False
-    print("⚠️  NumPy not available - advanced audio processing disabled")
+    logger.info("⚠️  NumPy not available - advanced audio processing disabled")
 
 # Import models
 from models import (
@@ -116,16 +116,16 @@ config.initialize_environment()
 # MongoDB connection - imported from shared database module to avoid circular imports
 from database import db, client
 
-print(f"🔗 MongoDB: Conectando a {config.MONGO_URL}")
-print(f"🗄️ Database: Usando '{config.DB_NAME}'")
+logger.info(f"🔗 MongoDB: Conectando a {config.MONGO_URL}")
+logger.info(f"🗄️ Database: Usando '{config.DB_NAME}'")
 
 # Initialize Feed Optimizer
 try:
     from optimized_feed import init_feed_optimizer
     init_feed_optimizer(db)
-    print("🚀 Feed optimizer initialized successfully")
+    logger.info("🚀 Feed optimizer initialized successfully")
 except Exception as e:
-    print(f"⚠️  Feed optimizer initialization failed: {e}")
+    logger.info(f"⚠️  Feed optimizer initialization failed: {e}")
 
 # Custom JSON encoder to handle datetime with UTC timezone
 def custom_json_serializer(obj):
@@ -164,17 +164,17 @@ app.router.default_response_class = CustomJSONResponse
 try:
     from fast_upload_endpoints import fast_upload_router
     app.include_router(fast_upload_router)
-    print("⚡ Fast upload system initialized successfully")
+    logger.info("⚡ Fast upload system initialized successfully")
 except Exception as e:
-    print(f"⚠️  Fast upload system initialization failed: {e}")
+    logger.info(f"⚠️  Fast upload system initialization failed: {e}")
 
 # Initialize Database Optimizer
 try:
     from database_optimizer import init_db_optimizer
     init_db_optimizer(db)
-    print("🗄️ Database optimizer initialized successfully")
+    logger.info("🗄️ Database optimizer initialized successfully")
 except Exception as e:
-    print(f"⚠️  Database optimizer initialization failed: {e}")
+    logger.info(f"⚠️  Database optimizer initialization failed: {e}")
 
 # ──────────────────────────────────────────────────────────────────────
 # 🗄️ COMPREHENSIVE INDEX INITIALIZATION
@@ -190,54 +190,54 @@ async def init_all_indexes():
         await db.polls.create_index([("vs_id", 1)], background=True, sparse=True)
         await db.polls.create_index([("is_active", 1), ("status", 1), ("created_at", -1)], background=True)
         await db.polls.create_index([("is_active", 1), ("status", 1), ("total_votes", -1), ("created_at", -1)], background=True)
-        print("🗄️  polls indexes: OK")
+        logger.info("🗄️  polls indexes: OK")
 
         # ── users ──
         await db.users.create_index([("username", 1)], background=True, unique=True)
         await db.users.create_index([("id", 1)], background=True, unique=True)
         await db.users.create_index([("email", 1)], background=True, unique=True)
-        print("🗄️  users indexes: OK")
+        logger.info("🗄️  users indexes: OK")
 
         # ── votes ──
         await db.votes.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
         await db.votes.create_index([("user_id", 1)], background=True)
-        print("🗄️  votes indexes: OK")
+        logger.info("🗄️  votes indexes: OK")
 
         # ── poll_likes ──
         await db.poll_likes.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
         await db.poll_likes.create_index([("user_id", 1)], background=True)
-        print("🗄️  poll_likes indexes: OK")
+        logger.info("🗄️  poll_likes indexes: OK")
 
         # ── saved_polls ──
         await db.saved_polls.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
         await db.saved_polls.create_index([("user_id", 1)], background=True)
-        print("🗄️  saved_polls indexes: OK")
+        logger.info("🗄️  saved_polls indexes: OK")
 
         # ── follows ──
         await db.follows.create_index([("follower_id", 1), ("following_id", 1)], background=True, unique=True)
         await db.follows.create_index([("following_id", 1)], background=True)
-        print("🗄️  follows indexes: OK")
+        logger.info("🗄️  follows indexes: OK")
 
         # ── comments ──
         await db.comments.create_index([("poll_id", 1), ("user_id", 1)], background=True)
         await db.comments.create_index([("user_id", 1)], background=True)
         await db.comments.create_index([("poll_id", 1), ("created_at", -1)], background=True)
-        print("🗄️  comments indexes: OK")
+        logger.info("🗄️  comments indexes: OK")
 
         # ── vs_experiences ──
         await db.vs_experiences.create_index([("created_at", -1)], background=True)
         await db.vs_experiences.create_index([("author_id", 1), ("created_at", -1)], background=True)
         await db.vs_experiences.create_index([("is_active", 1), ("created_at", -1)], background=True)
-        print("🗄️  vs_experiences indexes: OK")
+        logger.info("🗄️  vs_experiences indexes: OK")
 
         # ── challenges ──
         await db.challenges.create_index([("status", 1), ("published_at", -1)], background=True)
         await db.challenges.create_index([("creator_id", 1)], background=True)
-        print("🗄️  challenges indexes: OK")
+        logger.info("🗄️  challenges indexes: OK")
 
         # ── challenge_votes ──
         await db.challenge_votes.create_index([("challenge_id", 1), ("voter_id", 1)], background=True)
-        print("🗄️  challenge_votes indexes: OK")
+        logger.info("🗄️  challenge_votes indexes: OK")
 
         # ── story_views (unique) ──
         try:
@@ -255,15 +255,15 @@ async def init_all_indexes():
                     {"$set": {"views_count": actual_count}}
                 )
             if duplicates:
-                print(f"🧹 Cleaned up {len(duplicates)} duplicate story views")
+                logger.info(f"🧹 Cleaned up {len(duplicates)} duplicate story views")
             await db.story_views.create_index([("story_id", 1), ("user_id", 1)], unique=True, background=True)
-            print("🗄️  story_views indexes: OK")
+            logger.info("🗄️  story_views indexes: OK")
         except Exception as e:
-            print(f"⚠️  story_views index: {e}")
+            logger.info(f"⚠️  story_views index: {e}")
 
-        print("✅ All database indexes initialized")
+        logger.info("✅ All database indexes initialized")
     except Exception as e:
-        print(f"⚠️  Index initialization failed: {e}")
+        logger.info(f"⚠️  Index initialization failed: {e}")
 
 import asyncio
 try:
@@ -565,7 +565,7 @@ try:
 except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
-    print("⚠️  pydub not available - basic audio processing disabled")
+    logger.info("⚠️  pydub not available - basic audio processing disabled")
 
 try:
     import librosa
@@ -573,7 +573,7 @@ try:
     LIBROSA_AVAILABLE = True
 except ImportError:
     LIBROSA_AVAILABLE = False  
-    print("⚠️  librosa not available - advanced audio analysis disabled")
+    logger.info("⚠️  librosa not available - advanced audio analysis disabled")
 
 def process_audio_file(file_path: str, max_duration: int = 60) -> dict:
     """
@@ -600,7 +600,7 @@ def process_audio_file(file_path: str, max_duration: int = 60) -> dict:
         # Trim to max duration if necessary
         if original_duration > max_duration:
             audio = audio[:max_duration * 1000]  # pydub uses milliseconds
-            print(f"🎵 Audio trimmed from {original_duration:.1f}s to {max_duration}s")
+            logger.info(f"🎵 Audio trimmed from {original_duration:.1f}s to {max_duration}s")
         
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_out:
@@ -625,12 +625,12 @@ def process_audio_file(file_path: str, max_duration: int = 60) -> dict:
         }
         
     except Exception as e:
-        print(f"❌ Audio processing error: {str(e)}")
+        logger.info(f"❌ Audio processing error: {str(e)}")
         # Try with ffmpeg as fallback
         try:
             return process_audio_with_ffmpeg(file_path, max_duration)
         except Exception as fallback_error:
-            print(f"❌ FFmpeg fallback also failed: {str(fallback_error)}")
+            logger.info(f"❌ FFmpeg fallback also failed: {str(fallback_error)}")
             return {
                 'success': False,
                 'error': f"Error processing audio: {str(e)}"
@@ -734,8 +734,8 @@ def generate_waveform(audio_path: str, points: int = 20) -> List[float]:
         
         return waveform
     except Exception as e:
-        print(f"❌ Librosa waveform generation failed: {str(e)}")
-        print("🔄 Using basic waveform generation")
+        logger.info(f"❌ Librosa waveform generation failed: {str(e)}")
+        logger.info("🔄 Using basic waveform generation")
         # Return default waveform if generation fails
         return generate_basic_waveform(points)
 
@@ -816,7 +816,7 @@ async def search_itunes_track(artist: str, track: str):
                         }
         return None
     except Exception as e:
-        print(f"Error searching iTunes: {e}")
+        logger.info(f"Error searching iTunes: {e}")
         return None
 
 async def get_music_info(music_id: str):
@@ -835,10 +835,10 @@ async def get_music_info(music_id: str):
             
             # Check cache first
             if itunes_track_id in itunes_cache and is_cache_valid(itunes_cache[itunes_track_id]):
-                print(f"🎵 Using cached iTunes track info for ID: {itunes_track_id}")
+                logger.info(f"🎵 Using cached iTunes track info for ID: {itunes_track_id}")
                 return itunes_cache[itunes_track_id]['data']
             
-            print(f"🎵 Fetching iTunes track info for ID: {itunes_track_id}")
+            logger.info(f"🎵 Fetching iTunes track info for ID: {itunes_track_id}")
             
             # Fetch track info directly from iTunes API using track ID
             url = f"https://itunes.apple.com/lookup?id={itunes_track_id}"
@@ -864,20 +864,20 @@ async def get_music_info(music_id: str):
                         'uses': 0,
                         'source': 'iTunes'
                     }
-                    print(f"✅ Successfully fetched iTunes track: {music_info['title']} - {music_info['artist']}")
+                    logger.info(f"✅ Successfully fetched iTunes track: {music_info['title']} - {music_info['artist']}")
                     itunes_cache[itunes_track_id] = {
                         'data': music_info,
                         'cached_at': datetime.utcnow()
                     }
                     return music_info
                 else:
-                    print(f"❌ No results found for iTunes track ID: {itunes_track_id}")
+                    logger.info(f"❌ No results found for iTunes track ID: {itunes_track_id}")
                     return None
             else:
-                print(f"❌ iTunes API error: {response.status_code}")
+                logger.info(f"❌ iTunes API error: {response.status_code}")
                 return None
         except Exception as e:
-            print(f"❌ Error fetching iTunes track {music_id}: {str(e)}")
+            logger.info(f"❌ Error fetching iTunes track {music_id}: {str(e)}")
             return None
     
     # Check if this is a user audio ID (format: user_audio_XXXXX)
@@ -886,7 +886,7 @@ async def get_music_info(music_id: str):
     if music_id.startswith('user_audio_'):
         # New format with prefix - extract UUID
         user_audio_id = music_id.replace('user_audio_', '')
-        print(f"🎵 Fetching user audio info for prefixed ID: {user_audio_id}")
+        logger.info(f"🎵 Fetching user audio info for prefixed ID: {user_audio_id}")
     else:
         # Check if this looks like a UUID (backward compatibility)
         # UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars with 4 hyphens)
@@ -894,16 +894,16 @@ async def get_music_info(music_id: str):
         uuid_pattern = r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
         if re.match(uuid_pattern, music_id):
             user_audio_id = music_id
-            print(f"🔄 Detected bare UUID (backward compatibility): {user_audio_id}")
+            logger.info(f"🔄 Detected bare UUID (backward compatibility): {user_audio_id}")
     
     if user_audio_id:
         try:
             # Query the user_audio collection
             user_audio = await db.user_audio.find_one({"id": user_audio_id})
-            print(f"🔍 Database query result: {user_audio is not None}")
+            logger.info(f"🔍 Database query result: {user_audio is not None}")
             
             if user_audio:
-                print(f"📝 Found user audio: {user_audio.get('title')} by {user_audio.get('artist')}")
+                logger.info(f"📝 Found user audio: {user_audio.get('title')} by {user_audio.get('artist')}")
                 music_info = {
                     'id': music_id,  # Keep original ID for consistency
                     'title': user_audio.get('title'),
@@ -923,14 +923,14 @@ async def get_music_info(music_id: str):
                         'username': user_audio.get('artist'),  # Artist is usually the uploader's display name
                     }
                 }
-                print(f"✅ Successfully fetched user audio: {music_info['title']} - {music_info['artist']}")
+                logger.info(f"✅ Successfully fetched user audio: {music_info['title']} - {music_info['artist']}")
                 return music_info
             else:
-                print(f"❌ User audio not found for ID: {user_audio_id}")
+                logger.info(f"❌ User audio not found for ID: {user_audio_id}")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error fetching user audio {music_id}: {str(e)}")
+            logger.info(f"❌ Error fetching user audio {music_id}: {str(e)}")
             return None
     
     # If not an iTunes ID or user audio, check static music library
@@ -1121,11 +1121,11 @@ async def get_music_info(music_id: str):
                 # Update the music info with real preview URL
                 music_info = music_info.copy()  # Create a copy to avoid modifying the original
                 music_info['preview_url'] = itunes_result['preview_url']
-                print(f"✅ Fetched real preview URL for {music_info['title']} - {music_info['artist']}")
+                logger.info(f"✅ Fetched real preview URL for {music_info['title']} - {music_info['artist']}")
             else:
-                print(f"⚠️ Could not fetch preview URL for {music_info['title']} - {music_info['artist']}")
+                logger.info(f"⚠️ Could not fetch preview URL for {music_info['title']} - {music_info['artist']}")
         except Exception as e:
-            print(f"❌ Error fetching iTunes preview for {music_info['title']}: {str(e)}")
+            logger.info(f"❌ Error fetching iTunes preview for {music_info['title']}: {str(e)}")
     
     return music_info
 
@@ -1273,7 +1273,7 @@ async def search_music_realtime(
             'results': []
         }
     except Exception as e:
-        print(f"Error in real-time music search: {e}")
+        logger.info(f"Error in real-time music search: {e}")
         return {
             'success': False,
             'message': f'Search error: {str(e)}',
@@ -1341,7 +1341,7 @@ async def get_trending_music(
                                 'source': 'iTunes'
                             })
             except Exception as e:
-                print(f"Error fetching trending for '{term}': {e}")
+                logger.info(f"Error fetching trending for '{term}': {e}")
                 continue
         
         # Shuffle and limit
@@ -1354,7 +1354,7 @@ async def get_trending_music(
             'total': len(all_results)
         }
     except Exception as e:
-        print(f"Error in trending music: {e}")
+        logger.info(f"Error in trending music: {e}")
         return {
             'success': False,
             'results': [],
@@ -1678,7 +1678,7 @@ async def send_mention_notifications(mentioned_users: List[str], poll_id: str, c
     # TODO: Implement notification system for mentioned users
     # This is a placeholder function that will be implemented later
     # For now, we'll just log the mentions
-    print(f"Sending mention notifications to {mentioned_users} for poll {poll_id} by user {current_user.username}")
+    logger.info(f"Sending mention notifications to {mentioned_users} for poll {poll_id} by user {current_user.username}")
     pass
 
 # Basic API endpoint
@@ -2605,7 +2605,7 @@ async def ensure_user_profile(user_id: str):
         return profile_update
         
     except Exception as e:
-        print(f"❌ Error ensuring user profile for {user_id}: {e}")
+        logger.info(f"❌ Error ensuring user profile for {user_id}: {e}")
         return None
 
 @api_router.get("/user/profile/{user_id}")
@@ -3476,10 +3476,10 @@ async def update_follow_counts(user_id: str):
             upsert=True  # Create profile if doesn't exist
         )
         
-        print(f"✅ Updated follow counts for user {user_id}: {followers_count} followers, {following_count} following")
+        logger.info(f"✅ Updated follow counts for user {user_id}: {followers_count} followers, {following_count} following")
         
     except Exception as e:
-        print(f"❌ Error updating follow counts for user {user_id}: {e}")
+        logger.info(f"❌ Error updating follow counts for user {user_id}: {e}")
 
 @api_router.post("/users/{user_id}/follow")
 async def follow_user(user_id: str, current_user: UserResponse = Depends(get_current_user)):
@@ -3635,16 +3635,16 @@ async def send_message(message: MessageCreate, current_user: UserResponse = Depe
     """Send a message to another user"""
     try:
         # Debug logging simplificado
-        print(f"🔍 DEBUG - Message dict: {message.dict()}")
-        print(f"🔍 DEBUG - Current user: {current_user.id}")
+        logger.info(f"🔍 DEBUG - Message dict: {message.dict()}")
+        logger.info(f"🔍 DEBUG - Current user: {current_user.id}")
         
         # Verify recipient exists
         recipient = await db.users.find_one({"id": message.recipient_id})
         if not recipient:
-            print(f"❌ DEBUG - Recipient not found: {message.recipient_id}")
+            logger.info(f"❌ DEBUG - Recipient not found: {message.recipient_id}")
             raise HTTPException(status_code=404, detail="Recipient not found")
         
-        print(f"✅ DEBUG - Recipient found: {recipient.get('username')}")
+        logger.info(f"✅ DEBUG - Recipient found: {recipient.get('username')}")
         
         # Check if users can chat directly or need permission
         can_chat_directly = await check_chat_permission(current_user.id, message.recipient_id)
@@ -3685,8 +3685,8 @@ async def send_message(message: MessageCreate, current_user: UserResponse = Depe
                 }
         
     except Exception as e:
-        print(f"❌ DEBUG - Error in send_message: {str(e)}")
-        print(f"❌ DEBUG - Error type: {type(e)}")
+        logger.info(f"❌ DEBUG - Error in send_message: {str(e)}")
+        logger.info(f"❌ DEBUG - Error type: {type(e)}")
         raise e
     
     # Find or create conversation
@@ -3996,11 +3996,11 @@ async def get_message_requests(current_user: UserResponse = Depends(get_current_
                     "unread": req["id"] not in viewed_ids
                 })
         
-        print(f"✅ Returning {len(result)} message requests, {len(viewed_ids)} already viewed")
+        logger.info(f"✅ Returning {len(result)} message requests, {len(viewed_ids)} already viewed")
         return result
         
     except Exception as e:
-        print(f"❌ Error getting message requests: {str(e)}")
+        logger.info(f"❌ Error getting message requests: {str(e)}")
         return []
 
 
@@ -4030,11 +4030,11 @@ async def mark_requests_as_read(current_user: UserResponse = Depends(get_current
             )
             marked_count += 1
         
-        print(f"✅ Marked {marked_count} requests as read for user {current_user.id}")
+        logger.info(f"✅ Marked {marked_count} requests as read for user {current_user.id}")
         return {"success": True, "marked_count": marked_count}
         
     except Exception as e:
-        print(f"❌ Error marking requests as read: {str(e)}")
+        logger.info(f"❌ Error marking requests as read: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error marking requests as read")
@@ -4065,7 +4065,7 @@ async def get_unread_requests_count(current_user: UserResponse = Depends(get_cur
         return {"unread_count": unread_count, "total_count": len(request_ids)}
         
     except Exception as e:
-        print(f"❌ Error getting unread requests count: {str(e)}")
+        logger.info(f"❌ Error getting unread requests count: {str(e)}")
         return {"unread_count": 0, "total_count": 0}
 
 # =============  CHAT REQUEST ENDPOINTS =============
@@ -4346,12 +4346,12 @@ async def get_recent_followers(current_user: UserResponse = Depends(get_current_
                     "unread": follower["id"] not in viewed_ids
                 })
         
-        print(f"✅ Returning {len(followers)} recent followers, {len(viewed_ids)} already viewed")
+        logger.info(f"✅ Returning {len(followers)} recent followers, {len(viewed_ids)} already viewed")
         return followers
         
     except Exception as e:
         # Return empty list if no follows collection or error
-        print(f"Error getting recent followers: {e}")
+        logger.info(f"Error getting recent followers: {e}")
         return []
 
 
@@ -4384,11 +4384,11 @@ async def mark_followers_as_read(current_user: UserResponse = Depends(get_curren
             )
             marked_count += 1
         
-        print(f"✅ Marked {marked_count} followers as read for user {current_user.id}")
+        logger.info(f"✅ Marked {marked_count} followers as read for user {current_user.id}")
         return {"success": True, "marked_count": marked_count}
         
     except Exception as e:
-        print(f"❌ Error marking followers as read: {str(e)}")
+        logger.info(f"❌ Error marking followers as read: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error marking followers as read")
@@ -4422,7 +4422,7 @@ async def get_unread_followers_count(current_user: UserResponse = Depends(get_cu
         return {"unread_count": unread_count, "total_count": len(follower_ids)}
         
     except Exception as e:
-        print(f"❌ Error getting unread followers count: {str(e)}")
+        logger.info(f"❌ Error getting unread followers count: {str(e)}")
         return {"unread_count": 0, "total_count": 0}
 
 @api_router.get("/users/activity/recent")
@@ -4508,7 +4508,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         user_poll_ids = [poll["id"] for poll in user_polls]
         # Map de polls del usuario por id para lookup rápido de miniaturas
         user_polls_by_id = {p["id"]: p for p in user_polls}
-        print(f"DEBUG Activity: User has {len(user_poll_ids)} polls")
+        logger.info(f"DEBUG Activity: User has {len(user_poll_ids)} polls")
         
         # Get recent likes on user's polls using poll_id
         likes = await db.poll_likes.find({
@@ -4517,7 +4517,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             "created_at": {"$gte": seven_days_ago}
         }).sort("created_at", -1).limit(20).to_list(20)
         
-        print(f"DEBUG Activity: Found {len(likes)} likes on user's polls")
+        logger.info(f"DEBUG Activity: Found {len(likes)} likes on user's polls")
         
         # Batch resolve users for likes
         like_user_ids = list(set(l["user_id"] for l in likes))
@@ -4558,7 +4558,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             ]
         }).sort("created_at", -1).limit(20).to_list(20)
         
-        print(f"DEBUG Activity: Found {len(comments)} comments on user's polls")
+        logger.info(f"DEBUG Activity: Found {len(comments)} comments on user's polls")
         
         # Batch resolve users for comments
         comment_user_ids = list(set(c["user_id"] for c in comments))
@@ -4613,7 +4613,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             ]
         }).sort("created_at", -1).limit(20).to_list(20)
         
-        print(f"DEBUG Activity: Found {len(votes)} votes on user's polls")
+        logger.info(f"DEBUG Activity: Found {len(votes)} votes on user's polls")
         
         # Batch resolve users for votes
         vote_user_ids = list(set(v["user_id"] for v in votes))
@@ -4666,7 +4666,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
                 "created_at": {"$gte": seven_days_ago}
             }).sort("created_at", -1).limit(30).to_list(30)
             
-            print(f"DEBUG Activity: Found {len(vs_votes_recent)} VS votes on user's VS polls")
+            logger.info(f"DEBUG Activity: Found {len(vs_votes_recent)} VS votes on user's VS polls")
             
             # Map de polls VS por id para lookup rápido
             vs_polls_by_id = {p["id"]: p for p in user_polls if p.get("layout") == "vs"}
@@ -4719,7 +4719,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
                     })
         
         # Get recent mentions - find polls where user is mentioned
-        print(f"DEBUG Activity: Looking for mentions of user {current_user.id}")
+        logger.info(f"DEBUG Activity: Looking for mentions of user {current_user.id}")
         
         # Search in mentioned_users (poll level mentions)
         polls_with_general_mentions = await db.polls.find({
@@ -4728,7 +4728,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             "created_at": {"$gte": seven_days_ago}
         }).sort("created_at", -1).limit(20).to_list(20)
         
-        print(f"DEBUG Activity: Found {len(polls_with_general_mentions)} polls with general mentions")
+        logger.info(f"DEBUG Activity: Found {len(polls_with_general_mentions)} polls with general mentions")
         
         # Batch resolve author info for all mentioned polls
         general_author_ids = list(set(p["author_id"] for p in polls_with_general_mentions))
@@ -4769,7 +4769,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             "created_at": {"$gte": seven_days_ago}
         }).sort("created_at", -1).limit(20).to_list(20)
         
-        print(f"DEBUG Activity: Found {len(polls_with_option_mentions)} polls with option mentions")
+        logger.info(f"DEBUG Activity: Found {len(polls_with_option_mentions)} polls with option mentions")
         
         for poll in polls_with_option_mentions:
             author = authors_map.get(poll["author_id"])
@@ -4823,13 +4823,13 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         for activity in activities:
             activity["unread"] = activity["id"] not in viewed_ids
         
-        print(f"DEBUG Activity: Returning {len(activities)} activities, {len(viewed_ids)} already viewed")
+        logger.info(f"DEBUG Activity: Returning {len(activities)} activities, {len(viewed_ids)} already viewed")
         
         return activities
         
     except Exception as e:
         # Log error and return empty list
-        print(f"❌ Error in get_recent_activity: {str(e)}")
+        logger.info(f"❌ Error in get_recent_activity: {str(e)}")
         import traceback
         traceback.print_exc()
         return []
@@ -4922,11 +4922,11 @@ async def mark_activities_as_read(current_user: UserResponse = Depends(get_curre
                 upsert=True
             )
         
-        print(f"✅ Marked {len(activity_ids)} activities as read for user {current_user.id}")
+        logger.info(f"✅ Marked {len(activity_ids)} activities as read for user {current_user.id}")
         return {"success": True, "marked_count": len(activity_ids)}
         
     except Exception as e:
-        print(f"❌ Error marking activities as read: {str(e)}")
+        logger.info(f"❌ Error marking activities as read: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error marking activities as read")
@@ -5013,7 +5013,7 @@ async def get_unread_activity_count(current_user: UserResponse = Depends(get_cur
         return {"unread_count": unread_count, "total_count": len(activity_ids)}
         
     except Exception as e:
-        print(f"❌ Error getting unread count: {str(e)}")
+        logger.info(f"❌ Error getting unread count: {str(e)}")
         return {"unread_count": 0, "total_count": 0}
 
 
@@ -5586,7 +5586,7 @@ async def get_image_dimensions(file_path: Path) -> tuple[Optional[int], Optional
     try:
         return await asyncio.to_thread(_get_image_dimensions_sync, file_path)
     except Exception as e:
-        print(f"Error getting image dimensions: {e}")
+        logger.info(f"Error getting image dimensions: {e}")
         return None, None
 
 def _get_image_dimensions_sync(file_path: Path) -> tuple[Optional[int], Optional[int]]:
@@ -5640,7 +5640,7 @@ async def resolve_video_thumbnail(media_url: Optional[str], stored_thumbnail_url
             if thumb and not _is_video_url(thumb):
                 return thumb
         except Exception as e:
-            print(f"⚠️ resolve_video_thumbnail: DB lookup failed for {media_url}: {e}")
+            logger.info(f"⚠️ resolve_video_thumbnail: DB lookup failed for {media_url}: {e}")
 
     # 3) FFmpeg fallback: derive the file path from the media URL and run ffmpeg
     #    directly. Works for any video already on disk under UPLOAD_DIR.
@@ -5674,7 +5674,7 @@ async def resolve_video_thumbnail(media_url: Optional[str], stored_thumbnail_url
                         pass  # cache is best-effort
                     return thumb_url
         except Exception as e:
-            print(f"⚠️ resolve_video_thumbnail: ffmpeg fallback failed for {media_url}: {e}")
+            logger.info(f"⚠️ resolve_video_thumbnail: ffmpeg fallback failed for {media_url}: {e}")
 
     return None
 
@@ -5724,13 +5724,13 @@ async def get_thumbnail_for_media_url(media_url: str) -> Optional[str]:
                                     {"filename": filename},
                                     {"$set": {"thumbnail_url": thumbnail_url}}
                                 )
-                                print(f"✅ Generated and saved thumbnail for {filename}: {thumbnail_url}")
+                                logger.info(f"✅ Generated and saved thumbnail for {filename}: {thumbnail_url}")
                                 return thumbnail_url
                 
         return None
         
     except Exception as e:
-        print(f"Error getting thumbnail for media URL {media_url}: {e}")
+        logger.info(f"Error getting thumbnail for media URL {media_url}: {e}")
         return None
 
 async def get_video_info(file_path: Path) -> tuple[Optional[int], Optional[int], Optional[float]]:
@@ -5744,7 +5744,7 @@ def _get_video_info_sync(file_path: Path) -> tuple[Optional[int], Optional[int],
         cap = cv2.VideoCapture(str(file_path))
         
         if not cap.isOpened():
-            print(f"Could not open video: {file_path}")
+            logger.info(f"Could not open video: {file_path}")
             return 1280, 720, 30.0
         
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -5775,13 +5775,13 @@ def _get_video_info_sync(file_path: Path) -> tuple[Optional[int], Optional[int],
             
             resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
             cv2.imwrite(str(thumbnail_path), resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            print(f"Generated thumbnail: {thumbnail_path}")
+            logger.info(f"Generated thumbnail: {thumbnail_path}")
         
         cap.release()
         return width, height, duration
         
     except Exception as e:
-        print(f"Error getting video info: {e}")
+        logger.info(f"Error getting video info: {e}")
         return 1280, 720, 30.0
 
 async def get_video_thumbnail_url(file_path: str, upload_type: UploadType = UploadType.GENERAL) -> Optional[str]:
@@ -5826,16 +5826,16 @@ async def get_video_thumbnail_url(file_path: str, upload_type: UploadType = Uplo
                 try:
                     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
                     if proc.returncode != 0:
-                        print(f"⚠️ FFmpeg error generating thumbnail: {stderr.decode(errors='replace')}")
+                        logger.info(f"⚠️ FFmpeg error generating thumbnail: {stderr.decode(errors='replace')}")
                         return None
                     else:
-                        print(f"✅ Thumbnail generated successfully: {thumbnail_path}")
+                        logger.info(f"✅ Thumbnail generated successfully: {thumbnail_path}")
                 except asyncio.TimeoutError:
                     proc.kill()
-                    print(f"⚠️ Timeout generating thumbnail for {file_path}")
+                    logger.info(f"⚠️ Timeout generating thumbnail for {file_path}")
                     return None
             except Exception as e:
-                print(f"⚠️ Error generating thumbnail with ffmpeg: {e}")
+                logger.info(f"⚠️ Error generating thumbnail with ffmpeg: {e}")
                 return None
         
         # Check if thumbnail was created successfully
@@ -5845,7 +5845,7 @@ async def get_video_thumbnail_url(file_path: str, upload_type: UploadType = Uplo
         return None
         
     except Exception as e:
-        print(f"Error generating thumbnail URL: {e}")
+        logger.info(f"Error generating thumbnail URL: {e}")
         return None
 
 async def save_upload_file(file: UploadFile, file_path: Path) -> int:
@@ -6290,7 +6290,7 @@ async def get_test_carousel():
         return transformed_posts
         
     except Exception as e:
-        print(f"Error getting test carousel: {e}")
+        logger.info(f"Error getting test carousel: {e}")
         return []
 
 # 🎯 Field projection for feed poll queries — only fetch what we need
@@ -6582,7 +6582,7 @@ async def get_fast_polls(
         }
         
     except Exception as e:
-        print(f"❌ Fast feed error: {str(e)}")
+        logger.info(f"❌ Fast feed error: {str(e)}")
         # Fallback to original endpoint
         raise HTTPException(status_code=500, detail="Fast feed temporarily unavailable")
 
@@ -6617,7 +6617,7 @@ async def get_poll_details_on_demand(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Poll details error: {str(e)}")
+        logger.info(f"❌ Poll details error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to load poll details")
 
 @api_router.get("/polls/preload")
@@ -6655,7 +6655,7 @@ async def preload_next_batch(
         }
         
     except Exception as e:
-        print(f"❌ Preload error: {str(e)}")
+        logger.info(f"❌ Preload error: {str(e)}")
         return {"polls": [], "next_offset": current_offset, "error": str(e)}
 
 @api_router.get("/polls/ultra-fast")
@@ -7058,7 +7058,7 @@ async def get_ultra_fast_feed(
         }
         
     except Exception as e:
-        print(f"❌ Ultra-fast feed error: {str(e)}")
+        logger.info(f"❌ Ultra-fast feed error: {str(e)}")
         raise HTTPException(status_code=500, detail="Ultra-fast feed temporarily unavailable")
 
 @api_router.get("/polls/cursor")
@@ -7124,17 +7124,20 @@ async def get_polls_cursor(
     user_likes = await user_likes_cursor.to_list(len(poll_ids))
     liked_poll_ids = set(like["poll_id"] for like in user_likes)
     
+    # 🚀 BATCH: resolve all option user IDs in one query (N+1 fix)
+    all_option_user_ids = list(set(
+        uid for poll_data in polls
+        for uid in (o.get("user_id") for o in poll_data.get("options", []))
+        if uid
+    ))
+    option_users_dict = {}
+    if all_option_user_ids:
+        option_users_cursor = db.users.find({"id": {"$in": all_option_user_ids}})
+        option_users_dict = {u["id"]: u async for u in option_users_cursor}
+    
     # Build response
     result = []
     for poll_data in polls:
-        # Get option users
-        option_user_ids = [option["user_id"] for option in poll_data.get("options", []) if "user_id" in option]
-        if option_user_ids:
-            option_users_cursor = db.users.find({"id": {"$in": option_user_ids}})
-            option_users_list = await option_users_cursor.to_list(len(option_user_ids))
-            option_users_dict = {user["id"]: user for user in option_users_list}
-        else:
-            option_users_dict = {}
         
         # Process options - determine winner based on votes
         options = []
@@ -7652,7 +7655,7 @@ async def get_following_polls(
             )
             result.insert(0, challenge_response)
     except Exception as e:
-        print(f"⚠️ Error loading challenges for following feed: {e}")
+        logger.info(f"⚠️ Error loading challenges for following feed: {e}")
     
     return result
 
@@ -7993,7 +7996,7 @@ async def get_user_mentioned_polls(
         user_votes = await user_votes_cursor.to_list(len(poll_ids))
         user_votes_dict = {vote["poll_id"]: vote["option_id"] for vote in user_votes}
         
-        user_likes_cursor = db.likes.find({
+        user_likes_cursor = db.poll_likes.find({
             "poll_id": {"$in": poll_ids},
             "user_id": current_user.id
         })
@@ -8137,7 +8140,7 @@ async def get_user_mentioned_polls(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ Error getting mentioned polls: {str(e)}")
+        logger.info(f"❌ Error getting mentioned polls: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 async def _extract_carousel_audio_background(
@@ -8309,7 +8312,7 @@ async def create_poll(
     for i, option_data in enumerate(poll_data.options):
         # 📱 MOBILE DEBUG: Log incoming transform data
         media_transform = option_data.get("media_transform")
-        print(f"🔍 [BACKEND CROP DEBUG] Option {i}: media_transform = {media_transform}")
+        logger.info(f"🔍 [BACKEND CROP DEBUG] Option {i}: media_transform = {media_transform}")
 
         # 🛡️ SANITIZAR thumbnail_url
         raw_thumb = option_data.get("thumbnail_url")
@@ -8319,9 +8322,9 @@ async def create_poll(
             _looks_like_video_url(raw_thumb)
             or (raw_media and raw_thumb == raw_media)
         ):
-            print(
-                f"🛡️ [thumb-sanitize] option {i}: thumbnail_url apuntaba a un video "
-                f"({raw_thumb!r}) → se limpia para que la pipeline genere uno real"
+            logger.info(
+                "[thumb-sanitize] option %d: thumbnail_url apuntaba a un video (%r) -> se limpia para que la pipeline genere uno real",
+                i, raw_thumb
             )
             sanitized_thumb = None
 
@@ -8333,7 +8336,7 @@ async def create_poll(
         url_for_type = option_data.get("media_url") or ""
         if url_for_type and re.search(r"\.(mp4|mov|webm|avi|m4v|mkv)(\?|$)", url_for_type, re.IGNORECASE):
             if declared_type != "video":
-                print(f"🛡️ [media_type-fix] option {i}: media_type={declared_type!r} pero la URL es video → corrigiendo a 'video'")
+                logger.info(f"🛡️ [media_type-fix] option {i}: media_type={declared_type!r} pero la URL es video → corrigiendo a 'video'")
                 declared_type = "video"
         elif url_for_type and re.search(r"\.(jpg|jpeg|png|gif|webp|bmp|avif|heic|heif)(\?|$)", url_for_type, re.IGNORECASE):
             if declared_type != "image":
@@ -8361,9 +8364,9 @@ async def create_poll(
             
             invalid_users = set(poll_data.mentioned_users) - set(valid_mentioned_users)
             if invalid_users:
-                print(f"DEBUG: Invalid mentioned user IDs filtered out: {invalid_users}")
+                logger.info(f"DEBUG: Invalid mentioned user IDs filtered out: {invalid_users}")
         except Exception as e:
-            print(f"DEBUG: Error validating mentioned users: {e}")
+            logger.info(f"DEBUG: Error validating mentioned users: {e}")
             valid_mentioned_users = []
 
     # 🎵 CAROUSEL VIDEO AUDIO EXTRACTION
@@ -8545,9 +8548,9 @@ async def create_poll(
             mentioned_users_list = await mentioned_users_cursor.to_list(len(poll.mentioned_users))
             
             # Log for debugging
-            print(f"DEBUG: Found {len(mentioned_users_list)} users out of {len(poll.mentioned_users)} mentioned IDs for poll {poll.id}")
+            logger.info(f"DEBUG: Found {len(mentioned_users_list)} users out of {len(poll.mentioned_users)} mentioned IDs for poll {poll.id}")
             if len(mentioned_users_list) != len(poll.mentioned_users):
-                print(f"DEBUG: Missing users for IDs: {set(poll.mentioned_users) - set(user['id'] for user in mentioned_users_list)}")
+                logger.info(f"DEBUG: Missing users for IDs: {set(poll.mentioned_users) - set(user['id'] for user in mentioned_users_list)}")
             
             mentioned_users_data = [
                 MentionedUser(
@@ -8559,7 +8562,7 @@ async def create_poll(
                 for user in mentioned_users_list
             ]
         except Exception as e:
-            print(f"DEBUG: Error resolving mentioned users for poll {poll.id}: {e}")
+            logger.info(f"DEBUG: Error resolving mentioned users for poll {poll.id}: {e}")
             mentioned_users_data = []
     
     return PollResponse(
@@ -8654,7 +8657,7 @@ async def vote_on_poll(
             follow_status_cache.pop(key, None)
             
     except Exception as e:
-        print(f"Error updating profiles after vote: {e}")
+        logger.info(f"Error updating profiles after vote: {e}")
     
     # Fetch updated poll data to return
     updated_poll = await db.polls.find_one({"id": poll_id})
@@ -8752,7 +8755,7 @@ async def toggle_poll_like(
                 follow_status_cache.pop(key, None)
                 
         except Exception as e:
-            print(f"Error updating profiles after like removal: {e}")
+            logger.info(f"Error updating profiles after like removal: {e}")
         
         return {
             "liked": False,
@@ -8792,7 +8795,7 @@ async def toggle_poll_like(
                 follow_status_cache.pop(key, None)
                 
         except Exception as e:
-            print(f"Error updating profiles after like addition: {e}")
+            logger.info(f"Error updating profiles after like addition: {e}")
         
         return {
             "liked": True,
@@ -9581,7 +9584,7 @@ async def get_audio_details(
 ):
     """Obtener detalles de un audio específico (usuario o sistema iTunes)"""
     try:
-        print(f"🎵 Getting audio details for ID: {audio_id}")
+        logger.info(f"🎵 Getting audio details for ID: {audio_id}")
         
         # First try to find in user audio
         audio_data = await db.user_audio.find_one({
@@ -9590,7 +9593,7 @@ async def get_audio_details(
         })
         
         if audio_data:
-            print(f"✅ Found user audio: {audio_data.get('title')}")
+            logger.info(f"✅ Found user audio: {audio_data.get('title')}")
             # Verificar permisos de acceso para audio de usuario
             if audio_data["privacy"] == AudioPrivacy.PRIVATE and audio_data["uploader_id"] != current_user.id:
                 raise HTTPException(status_code=403, detail="Access denied to private audio")
@@ -9617,13 +9620,13 @@ async def get_audio_details(
             }
         
         # If not found in user audio, try system music
-        print(f"🔍 User audio not found, checking system music for ID: {audio_id}")
+        logger.info(f"🔍 User audio not found, checking system music for ID: {audio_id}")
         
         # Get music info using existing function (supports iTunes IDs)
         music_info = await get_music_info(audio_id)
         
         if music_info:
-            print(f"✅ Found system music: {music_info.get('title')} by {music_info.get('artist')}")
+            logger.info(f"✅ Found system music: {music_info.get('title')} by {music_info.get('artist')}")
             
             # Convert to compatible format with frontend
             audio_response = {
@@ -9649,7 +9652,7 @@ async def get_audio_details(
             }
         
         # If neither user audio nor system music found
-        print(f"❌ Audio not found in user audio or system music: {audio_id}")
+        logger.info(f"❌ Audio not found in user audio or system music: {audio_id}")
         raise HTTPException(status_code=404, detail="Audio not found")
         
     except HTTPException:
@@ -9768,7 +9771,8 @@ async def get_posts_using_audio(
                     audio_exists = True
                     audio_source = "system_music"
                     logger.info(f"✅ Audio encontrado en sistema de música: {audio_id}")
-            except:
+            except Exception:
+                logger.warning(f"Error obteniendo info de audio {audio_id}", exc_info=True)
                 pass
         
         if not audio_exists:
@@ -10053,7 +10057,7 @@ async def get_posts_using_audio(
                 if isinstance(created_at_dt, str):
                     try:
                         created_at_dt = datetime.fromisoformat(created_at_dt.replace('Z', '+00:00'))
-                    except:
+                    except Exception:
                         created_at_dt = datetime.utcnow()
                 elif not isinstance(created_at_dt, datetime):
                     created_at_dt = datetime.utcnow()

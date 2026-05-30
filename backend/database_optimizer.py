@@ -16,6 +16,7 @@ class DatabaseOptimizer:
         self.db = db
         self.cache = {}
         self.cache_ttl = 300  # 5 minutes
+        self._index_count = 0
         
     async def initialize_indexes(self):
         """Create optimal indexes for TikTok-style queries"""
@@ -25,57 +26,229 @@ class DatabaseOptimizer:
         # Polls collection - Critical indexes
         await self.db.polls.create_index([
             ("is_active", 1),
+        self._index_count += 1
             ("created_at", -1)
         ], name="active_polls_by_date")
         
         await self.db.polls.create_index([
             ("author_id", 1),
+        self._index_count += 1
             ("created_at", -1)
         ], name="user_polls_by_date")
         
         await self.db.polls.create_index([
             ("total_votes", -1),
+        self._index_count += 1
             ("created_at", -1)
         ], name="trending_polls")
         
         await self.db.polls.create_index([
             ("likes_count", -1),
+        self._index_count += 1
             ("created_at", -1)
         ], name="popular_polls")
         
+        # 🔥 CRITICAL: challenge_pending filter usado en TODOS los feeds
+        await self.db.polls.create_index([
+            ("is_active", 1),
+        self._index_count += 1
+            ("challenge_pending", 1),
+            ("created_at", -1)
+        ], name="feed_active_no_challenge")
+        
+        # 🔥 CRITICAL: status filter usado en todos los feeds
+        await self.db.polls.create_index([
+            ("status", 1),
+        self._index_count += 1
+            ("is_active", 1),
+            ("created_at", -1)
+        ], name="feed_status_filter")
+        
+        # 🔥 CRITICAL: vs_id filter para VS-only queries
+        await self.db.polls.create_index([
+            ("vs_id", 1),
+        self._index_count += 1
+            ("is_active", 1),
+            ("created_at", -1)
+        ], name="vs_active_polls")
+        
+        # 🔥 CRITICAL: mencionados en opciones (get_mentioned_polls)
+        await self.db.polls.create_index([
+            ("options.mentioned_users", 1),
+        self._index_count += 1
+            ("is_active", 1),
+            ("created_at", -1)
+        ], name="mentioned_users_polls")
+        
         # Users collection
         await self.db.users.create_index([("id", 1)], unique=True)
+        self._index_count += 1
         await self.db.users.create_index([("username", 1)], unique=True)
+        self._index_count += 1
         await self.db.users.create_index([("email", 1)], unique=True)
+        self._index_count += 1
         
         # Votes collection - for fast user vote lookup
         await self.db.votes.create_index([
             ("user_id", 1),
+        self._index_count += 1
             ("poll_id", 1)
         ], name="user_poll_votes")
         
         await self.db.votes.create_index([
             ("poll_id", 1),
+        self._index_count += 1
             ("option_id", 1)
         ], name="poll_option_votes")
         
         # Likes collection
         await self.db.poll_likes.create_index([
             ("user_id", 1),
+        self._index_count += 1
             ("poll_id", 1)
         ], name="user_poll_likes")
         
         await self.db.poll_likes.create_index([
             ("poll_id", 1)
+        self._index_count += 1
         ], name="poll_likes")
         
         # Comments collection
         await self.db.comments.create_index([
             ("poll_id", 1),
+        self._index_count += 1
             ("created_at", -1)
         ], name="poll_comments")
         
-        print("✅ Performance indexes created successfully")
+        # 🔥 Comment likes - usado en cada like check
+        await self.db.comment_likes.create_index([
+            ("comment_id", 1),
+        self._index_count += 1
+            ("user_id", 1)
+        ], name="comment_likes_check")
+        
+        # 🔥 Login attempts - rate limiting
+        await self.db.login_attempts.create_index([
+            ("email", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="login_attempts_email")
+        
+        await self.db.login_attempts.create_index([
+            ("ip_address", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="login_attempts_ip")
+        
+        # 🔥 Conversations - participant lookup
+        await self.db.conversations.create_index([
+            ("participants", 1),
+        self._index_count += 1
+            ("last_message_at", -1)
+        ], name="conversations_participants")
+        
+        # 🔥 Messages - conversation listing
+        await self.db.messages.create_index([
+            ("conversation_id", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="messages_conversation")
+        
+        # 🔥 Chat requests
+        await self.db.chat_requests.create_index([
+            ("sender_id", 1),
+        self._index_count += 1
+            ("status", 1),
+            ("created_at", -1)
+        ], name="chat_requests_sender")
+        
+        await self.db.chat_requests.create_index([
+            ("receiver_id", 1),
+        self._index_count += 1
+            ("status", 1),
+            ("created_at", -1)
+        ], name="chat_requests_receiver")
+        
+        # 🔥 Request views
+        await self.db.request_views.create_index([
+            ("user_id", 1),
+        self._index_count += 1
+            ("request_id", 1)
+        ], name="request_views_user")
+        
+        # 🔥 Follower views
+        await self.db.follower_views.create_index([
+            ("user_id", 1)
+        self._index_count += 1
+        ], name="follower_views_user")
+        
+        # 🔥 Activity views
+        await self.db.activity_views.create_index([
+            ("user_id", 1)
+        self._index_count += 1
+        ], name="activity_views_user")
+        
+        # 🔥 Uploaded files - thumbnail lookup
+        await self.db.uploaded_files.create_index([
+            ("filename", 1)
+        self._index_count += 1
+        ], name="uploaded_files_filename")
+        
+        # 🔥 User audio
+        await self.db.user_audio.create_index([
+            ("uploader_id", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="user_audio_uploader")
+        
+        # 🔥 Poll shares
+        await self.db.poll_shares.create_index([
+            ("user_id", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="poll_shares_user")
+        
+        # 🔥 Search history
+        await self.db.search_history.create_index([
+            ("user_id", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="search_history_user")
+        
+        # 🔥 User devices
+        await self.db.user_devices.create_index([
+            ("user_id", 1)
+        self._index_count += 1
+        ], name="user_devices_user")
+        
+        # 🔥 Security notifications
+        await self.db.security_notifications.create_index([
+            ("user_id", 1),
+        self._index_count += 1
+            ("created_at", -1)
+        ], name="security_notifications_user")
+        
+        # 🔥 User audio use
+        await self.db.user_audio_use.create_index([
+            ("audio_id", 1)
+        self._index_count += 1
+        ], name="user_audio_use_audio")
+        
+        # 🔥 Follows - get_following_polls
+        await self.db.follows.create_index([
+            ("follower_id", 1),
+        self._index_count += 1
+            ("following_id", 1)
+        ], name="follows_follower_following")
+        
+        # 🔥 Saved polls
+        await self.db.saved_polls.create_index([
+            ("user_id", 1),
+        self._index_count += 1
+            ("poll_id", 1)
+        ], name="saved_polls_user_poll")
+        
+        print(f"✅ {self._index_count} performance indexes created successfully")
     
     async def get_optimized_feed(
         self, 
@@ -348,6 +521,7 @@ class DatabaseOptimizer:
             
             if bulk_ops:
                 await self.db.polls.bulk_write(bulk_ops)
+        self._index_count += 1
                 print(f"✅ Updated {len(bulk_ops)} counters in batch")
             
         except Exception as e:

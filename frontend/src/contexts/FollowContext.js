@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 
 const FollowContext = createContext();
@@ -287,7 +287,7 @@ export const FollowProvider = ({ children }) => {
     }
   }, [apiRequest]);
 
-  const value = {
+  const value = useMemo(() => ({
     followUser,
     unfollowUser,
     getFollowStatus,
@@ -300,7 +300,9 @@ export const FollowProvider = ({ children }) => {
     followingUsers,
     followStateVersion,
     refreshTrigger
-  };
+  }), [followUser, unfollowUser, getFollowStatus, isFollowing, followsMe,
+      getFollowingUsers, getUserFollowers, getUserFollowing, getUserByUsername,
+      followingUsers, followStateVersion, refreshTrigger]);
 
   return (
     <FollowContext.Provider value={value}>

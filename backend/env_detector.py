@@ -177,14 +177,34 @@ class EnvironmentDetector:
         return config
     
     def _fetch_dynamic_config(self, subdomain: str) -> Optional[Dict[str, str]]:
-        """Obtiene configuración dinámica desde el servicio central de Emergent"""
+        """Obtiene configuración dinámica desde el servicio central de Emergent (no bloqueante)"""
         try:
-            response = requests.get(
-                f'https://config.emergent.sh/backend-config?subdomain={subdomain}',
-                timeout=5
-            )
-            if response.status_code == 200:
-                return response.json()
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('config.emergent.sh', 443))
+            sock.close()
+            if result != 0:
+                logger.debug("config.emergent.sh no responde - saltando fetch dinámico")
+                return None
+        except Exception:
+            return None
+        try:
+            import httpx
+            try:
+                with httpx.Client(timeout=3.0) as hc:
+                    response = hc.get(
+                        f'https://config.emergent.sh/backend-config?subdomain={subdomain}'
+                    )
+                    if response.status_code == 200:
+                        return response.json()
+            except ImportError:
+                response = requests.get(
+                    f'https://config.emergent.sh/backend-config?subdomain={subdomain}',
+                    timeout=3
+                )
+                if response.status_code == 200:
+                    return response.json()
         except Exception as e:
             logger.debug(f"Error obteniendo configuración dinámica: {e}")
         return None

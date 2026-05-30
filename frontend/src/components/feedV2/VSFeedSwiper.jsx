@@ -13,11 +13,12 @@
  *   - `isNear`:   slide adyacente (±1) → preload poster + 256KB del video.
  *   - `muted`:    estado global de audio (toggle desde TopBar).
  */
-import React, { useRef, useState, useCallback, useEffect, useDeferredValue } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Swiper, SwiperSlide } from 'swiper/react';
 import { Virtual, Mousewheel, Keyboard } from 'swiper/modules';
 import VSSlideV2 from './VSSlideV2';
 import feedMediaPrefetcher from '../../services/feedMediaPrefetcher';
+import useUltraSmoothFeed from '../../hooks/useUltraSmoothFeed';
 import 'swiper/css';
 import 'swiper/css/virtual';
 
@@ -42,6 +43,8 @@ export default function VSFeedSwiper({
   renderSlide,
 }) {
   const swiperRef = useRef(null);
+  const containerRef = useRef(null);
+  useUltraSmoothFeed({ enabled: true, containerRef });
   const [activeIndex, setActiveIndex] = useState(initialIndex);
 
   const handleSlideChange = useCallback((swiper) => {
@@ -75,11 +78,13 @@ export default function VSFeedSwiper({
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 bg-black"
       style={{
         height: '100dvh',
         width: '100vw',
         overflow: 'hidden',
+        contain: 'paint',
       }}
       data-testid="vs-feed-swiper-container"
     >
@@ -121,22 +126,27 @@ export default function VSFeedSwiper({
         style={{
           height: '100%',
           width: '100%',
+          transform: 'translateZ(0)',
         }}
         data-testid="vs-feed-swiper"
       >
         {polls.map((poll, idx) => {
-          const delta = idx - activeIndex; // <0 arriba, >0 abajo
+          const delta = idx - activeIndex;
           const distance = Math.abs(delta);
           const isActive = delta === 0;
-          // Windowing asimétrico: montamos contenido en [-BEHIND, +AHEAD].
-          // El slide que se volverá activo siempre estaba dentro de la ventana,
-          // así que nunca hay "flash" en el activo; los lejanos liberan memoria.
           const withinWindow = delta >= -WINDOW_BEHIND && delta <= WINDOW_AHEAD;
           return (
             <SwiperSlide
               key={poll.id || idx}
               virtualIndex={idx}
-              style={{ height: '100dvh' }}
+              style={{
+                height: '100dvh',
+                contain: 'layout style paint',
+                contentVisibility: isActive ? 'visible' : 'auto',
+                transform: 'translateZ(0)',
+                backfaceVisibility: 'hidden',
+                willChange: isActive ? 'transform, opacity' : 'auto',
+              }}
             >
               {!withinWindow ? (
                 <div className="w-full h-full bg-black" data-testid="vs-slide-placeholder" />
@@ -158,6 +168,18 @@ export default function VSFeedSwiper({
           );
         })}
       </Swiper>
+      <style>{`
+        .snaptok-swiper .swiper-slide {
+          contain: layout style paint;
+          content-visibility: auto;
+          transform: translateZ(0);
+          backface-visibility: hidden;
+        }
+        .snaptok-swiper .swiper-slide-active,
+        .snaptok-swiper .swiper-slide-visible {
+          content-visibility: visible;
+        }
+      `}</style>
     </div>
   );
 }

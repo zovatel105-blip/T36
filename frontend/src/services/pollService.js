@@ -43,7 +43,8 @@ class PollService {
       limit = 20, 
       offset = 0, 
       category = null, 
-      featured = null 
+      featured = null,
+      vs_only = true
     } = options;
 
     const params = new URLSearchParams({
@@ -53,6 +54,7 @@ class PollService {
 
     if (category) params.append('category', category);
     if (featured !== null) params.append('featured', featured.toString());
+    if (vs_only) params.append('vs_only', 'true');
 
     try {
       const headers = this.getAuthHeaders();
@@ -60,7 +62,6 @@ class PollService {
       // ⚡ ALWAYS TRY ULTRA-FAST ENDPOINT FIRST (3-5x faster)
       try {
         const ultraFastUrl = `${this.baseURL}/polls/ultra-fast?${params}`;
-        console.log('⚡ Using ultra-fast endpoint:', ultraFastUrl);
         
         const ultraResponse = await fetch(ultraFastUrl, {
           method: 'GET',
@@ -70,18 +71,14 @@ class PollService {
         if (ultraResponse.ok) {
           const ultraResult = await ultraResponse.json();
           const data = ultraResult.polls || ultraResult;
-          console.log(`🚀 Ultra-fast success: ${data.length} polls loaded in ${ultraResult.response_time_ms || 'N/A'}ms`);
           return data;
-        } else {
-          console.warn(`⚠️ Ultra-fast returned ${ultraResponse.status}, falling back to standard`);
         }
       } catch (ultraError) {
-        console.warn('⚠️ Ultra-fast endpoint failed:', ultraError.message);
+        // Silent fallback
       }
       
-      // FALLBACK: Standard endpoint (slower but more reliable)
+      // FALLBACK: Standard endpoint
       const url = `${this.baseURL}/polls?${params}`;
-      console.log('🌐 Fallback to standard endpoint:', url);
       
       const response = await fetch(url, {
         method: 'GET',
@@ -89,13 +86,58 @@ class PollService {
       });
 
       const data = await this.handleResponse(response);
-      console.log('📊 Standard endpoint:', data.length, 'polls loaded');
       
       return data;
     } catch (error) {
       console.error('❌ Error fetching polls:', error);
       throw error;
     }
+  }
+
+  // 🚀 Cursor-based pagination (efficient deep scroll)
+  async getPollsCursor(cursor = null, limit = 10, vs_only = true) {
+    const params = new URLSearchParams({
+      limit: limit.toString(),
+      vs_only: vs_only.toString(),
+    });
+    if (cursor) params.append('cursor', cursor);
+
+    try {
+      const response = await fetch(`${this.baseURL}/polls/cursor?${params}`, {
+        method: 'GET',
+        headers: this.getAuthHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Cursor pagination error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return {
+        polls: result.polls || [],
+        nextCursor: result.next_cursor || null,
+        hasMore: result.has_more || false
+      };
+    } catch (error) {
+      console.error('❌ Cursor pagination error:', error);
+      return { polls: [], nextCursor: null, hasMore: false };
+    }
+  }
+
+  // ⚡ Preload next batch for infinite scroll
+  async preloadNextBatch(currentOffset = 0, batchSize = 5) {
+    try {
+      const response = await fetch(
+        `${this.baseURL}/polls/preload?current_offset=${currentOffset}&batch_size=${batchSize}`,
+        { method: 'GET', headers: this.getAuthHeaders() }
+      );
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch (e) {
+      // Silent
+    }
+    return { polls: [] };
   }
 
   // Get a specific poll by ID
@@ -358,14 +400,14 @@ class PollService {
   async getPollsForFrontend(options = {}) {
     try {
       const backendPolls = await this.getPolls(options);
-      // 🎯 MVP VS-ONLY: aplicar filtro frontend para mostrar solo publicaciones VS
-      return filterToVSOnly(backendPolls.map(poll => this.transformPollData(poll)));
+      // Backend ya filtra VS con vs_only=true por defecto, pero mantenemos
+      // filterToVSOnly como safety net por si el endpoint fallback (/polls)
+      // no soporta el parámetro vs_only.
+      const transformed = backendPolls.map(poll => this.transformPollData(poll));
+      if (options.vs_only === false) return transformed;
+      return filterToVSOnly(transformed);
     } catch (error) {
       console.error('Error fetching polls for frontend:', error);
-      // 🔧 OFFLINE FIX: Re-lanzamos el error para que el caller (FeedPage)
-      // pueda distinguir entre "no hay posts" (array vacío) y "fallo de red".
-      // Antes devolvíamos [] silenciosamente, lo cual provocaba que el feed
-      // cacheado se sobrescribiera con un array vacío al estar offline.
       throw error;
     }
   }

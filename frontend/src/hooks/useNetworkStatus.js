@@ -34,31 +34,74 @@ const normalizeType = (t) => {
   return 'unknown';
 };
 
+const readNavConn = () => {
+  if (typeof navigator === 'undefined') return {};
+  const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (!c) return {};
+  return {
+    effectiveType: c.effectiveType,
+    saveData: !!c.saveData,
+    downlink: typeof c.downlink === 'number' ? c.downlink : null,
+  };
+};
+
 export const useNetworkStatus = () => {
   const [state, setState] = useState(() => {
     const initialOnline =
       typeof navigator !== 'undefined' ? navigator.onLine !== false : true;
+    const nc = readNavConn();
     return {
       isOnline: initialOnline,
       connectionType: 'unknown',
       isMetered: false,
+      effectiveType: nc.effectiveType || 'unknown',
+      saveData: nc.saveData || false,
+      downlink: nc.downlink,
+      isSlowConnection: nc.effectiveType === 'slow-2g' || nc.effectiveType === '2g' || nc.effectiveType === '3g' || nc.saveData,
     };
   });
 
-  const update = useCallback((status) => {
+  const update = useCallback((status, navOverride) => {
     const connectionType = normalizeType(status?.connectionType);
+    const nc = navOverride || readNavConn();
+    const et = nc.effectiveType || 'unknown';
     setState({
       isOnline: !!status?.connected,
       connectionType,
       isMetered: connectionType === 'cellular',
+      effectiveType: et,
+      saveData: nc.saveData || false,
+      downlink: nc.downlink,
+      isSlowConnection: et === 'slow-2g' || et === '2g' || et === '3g' || !!nc.saveData,
     });
   }, []);
 
   useEffect(() => {
     let listenerHandle = null;
+    let navListener = null;
     let cancelled = false;
 
+    const refreshNavConn = () => {
+      if (!cancelled) {
+        const nc = readNavConn();
+        setState(prev => ({
+          ...prev,
+          effectiveType: nc.effectiveType || 'unknown',
+          saveData: nc.saveData || false,
+          downlink: nc.downlink,
+          isSlowConnection: nc.effectiveType === 'slow-2g' || nc.effectiveType === '2g' || nc.effectiveType === '3g' || !!nc.saveData,
+        }));
+      }
+    };
+
     const init = async () => {
+      // Escuchar cambios de navigator.connection (effectiveType, saveData)
+      const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (c && typeof c.addEventListener === 'function') {
+        navListener = () => refreshNavConn();
+        c.addEventListener('change', navListener);
+      }
+
       if (isCapacitorAvailable()) {
         try {
           const { Network } = await import('@capacitor/network');
@@ -71,8 +114,6 @@ export const useNetworkStatus = () => {
             }
           );
         } catch (err) {
-          // Fallback a navigator si el plugin falla
-          // eslint-disable-next-line no-console
           console.warn('[useNetworkStatus] Capacitor Network init failed:', err?.message);
           attachWebListeners();
         }
@@ -89,7 +130,6 @@ export const useNetworkStatus = () => {
     const attachWebListeners = () => {
       window.addEventListener('online', onOnline);
       window.addEventListener('offline', onOffline);
-      // estado inicial
       update({
         connected: navigator.onLine !== false,
         connectionType: 'unknown',
@@ -102,8 +142,10 @@ export const useNetworkStatus = () => {
       cancelled = true;
       try {
         listenerHandle?.remove?.();
-      } catch {
-        /* noop */
+      } catch { /* noop */ }
+      if (navListener) {
+        const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (c && typeof c.removeEventListener === 'function') c.removeEventListener('change', navListener);
       }
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);

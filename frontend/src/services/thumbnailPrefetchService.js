@@ -1,33 +1,24 @@
 /**
  * Thumbnail Prefetch Service
  * --------------------------
- * Descarga silenciosamente los thumbnails (y avatares) de los proximos
- * posts que el usuario va a ver en el feed, para que cuando llegue a ellos
- * ya esten en la cache HTTP del WebView.
+ * Descarga Y DECODIFICA silenciosamente los thumbnails (y avatares) de los
+ * próximos posts que el usuario va a ver en el feed, para que cuando llegue
+ * a ellos ya estén en GPU y listos para pintar instantáneamente.
  *
- * Estrategia:
- *   - Usamos `new Image()` con `src` + `crossOrigin`. El WebView/Chrome
- *     hace la request, la guarda en su cache HTTP y esta lista cuando el
- *     <img> real del DOM la renderice.
- *   - Deduplicamos URLs ya pedidas en la sesion (Set en memoria).
- *   - Limitamos concurrencia para no saturar la red en dispositivos lentos.
- *   - Exponemos `prefetchAroundIndex(polls, index, aheadCount)` que es lo
- *     que el feed llama cuando cambia el post activo.
- *
- * NOTA: No cacheamos en disco manualmente — confiamos en el HTTP cache
- * nativo del WebView (mucho mas eficiente y reutilizable). El feed cache
- * JSON + este prefetch de thumbnails cubren el 80% del efecto "instant
- * feed" que se siente en TikTok/Instagram con muy poco esfuerzo.
+ * Estrategia TikTok:
+ *   1. Creamos un `new Image()` que descarga la URL → HTTP cache.
+ *   2. En onload, llamamos `img.decode()` que fuerza al browser a decodificar
+ *      la imagen en GPU. Sin este paso, el <img> del DOM solo encuentra la
+ *      imagen en HTTP cache pero tiene que decodificarla → visible 1-2 frames
+ *      después (el "flash" que vemos en feeds no optimizados).
+ *   3. Deduplicamos URLs ya pedidas en la sesión (Set en memoria).
+ *   4. Concurrencia limitada a MAX_CONCURRENCY para no saturar la red.
  */
 
-// URLs ya pedidas en esta sesion
 const inFlight = new Set();
 const completed = new Set();
 
-// Concurrencia: como maximo N descargas simultaneas.
-// En dispositivos con red lenta hacer mas de esto no ayuda y si retrasa
-// la descarga del post actual.
-const MAX_CONCURRENCY = 4;
+const MAX_CONCURRENCY = 6;
 let activeCount = 0;
 const queue = [];
 
@@ -51,7 +42,10 @@ function prefetchOne(url) {
 
     enqueue(() => {
       activeCount++;
+      let cancelled = false;
       const img = new Image();
+      img.crossOrigin = 'anonymous';
+
       const cleanup = () => {
         activeCount--;
         inFlight.delete(url);
@@ -59,15 +53,26 @@ function prefetchOne(url) {
         pump();
         resolve();
       };
-      img.onload = cleanup;
+
+      const onLoad = async () => {
+        if (cancelled) { cleanup(); return; }
+        // 🚀 PRE-DECODE REAL: forzar decodificación en GPU
+        // Sin esto, el <img> del DOM solo encuentra la imagen en HTTP cache
+        // pero tiene que decodificarla → 1-2 frames de flash.
+        try {
+          await img.decode();
+        } catch (_) { /* decode fail — la imagen se renderiza igual */ }
+        if (!cancelled) cleanup();
+      };
+
+      img.onload = onLoad;
       img.onerror = cleanup;
-      // decoding=async evita bloquear el hilo principal mientras decodifica
-      try {
-        img.decoding = 'async';
-      } catch (_) {
-        /* noop */
-      }
       img.src = url;
+
+      // Timeout de seguridad: si decode no termina en 5s, igual limpiamos
+      setTimeout(() => {
+        if (!cancelled) { cancelled = true; cleanup(); }
+      }, 5000);
     });
   });
 }
@@ -89,18 +94,28 @@ function extractImageUrls(poll) {
   if (poll?.thumbnail_url) urls.push(poll.thumbnail_url);
 
   // Opciones (slides del carrusel): cada una puede tener thumbnail y/o media
-  const options = Array.isArray(poll?.options) ? poll.options : [];
-  for (const opt of options) {
+  for (const opt of collectAllOptions(poll)) {
     if (!opt) continue;
-    // Campo directo
     if (opt.thumbnail_url) urls.push(opt.thumbnail_url);
-    // Estructura frontend normalizada (ver pollService.js)
     if (opt.media?.thumbnail) urls.push(opt.media.thumbnail);
-    // Para imagenes, la propia media_url ES la miniatura
     if (opt.media_type === 'image' && opt.media_url) urls.push(opt.media_url);
   }
 
   return urls.filter(Boolean);
+}
+
+function collectAllOptions(poll) {
+  const all = [];
+  if (Array.isArray(poll?.options)) {
+    for (const o of poll.options) if (o) all.push(o);
+  }
+  if (Array.isArray(poll?.vs_questions)) {
+    for (const q of poll.vs_questions) {
+      const qOpts = Array.isArray(q?.options) ? q.options : [];
+      for (const o of qOpts) if (o) all.push(o);
+    }
+  }
+  return all;
 }
 
 export const thumbnailPrefetch = {

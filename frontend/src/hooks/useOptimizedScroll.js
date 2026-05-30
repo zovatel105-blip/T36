@@ -9,16 +9,15 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
   const [isScrolling, setIsScrolling] = useState(false);
   const [scrollMetrics, setScrollMetrics] = useState({
     velocity: 0,
-    direction: 0, // 1 for down, -1 for up, 0 for static
+    direction: 0,
     momentum: 0
   });
 
-  // Performance refs to avoid recreating objects
   const metricsRef = useRef({ lastScrollTop: 0, lastTime: Date.now() });
   const rafRef = useRef(null);
   const timeoutRef = useRef(null);
+  const velocityRef = useRef(0); // ref to avoid re-attaching listener on velocity change
 
-  // Optimized scroll handler with momentum tracking
   const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
 
@@ -27,27 +26,25 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
     const currentTime = Date.now();
     const containerHeight = container.clientHeight;
     
-    // Calculate velocity and direction
     const deltaY = currentScrollTop - metricsRef.current.lastScrollTop;
     const deltaTime = currentTime - metricsRef.current.lastTime;
     const velocity = deltaTime > 0 ? Math.abs(deltaY) / deltaTime : 0;
     const direction = deltaY > 0 ? 1 : deltaY < 0 ? -1 : 0;
 
-    // Update metrics
+    velocityRef.current = velocity;
+
     setScrollMetrics(prev => ({
       velocity,
       direction,
-      momentum: Math.max(prev.momentum * 0.9, velocity) // Decay momentum
+      momentum: Math.max(prev.momentum * 0.9, velocity)
     }));
 
-    // Update refs for next calculation
     metricsRef.current.lastScrollTop = currentScrollTop;
     metricsRef.current.lastTime = currentTime;
 
-    // Calculate new active index with threshold
     const exactIndex = currentScrollTop / containerHeight;
     const newIndex = Math.round(exactIndex);
-    const threshold = velocity > 50 ? 0.2 : 0.3; // Dynamic threshold
+    const threshold = velocity > 50 ? 0.2 : 0.3;
 
     if (Math.abs(exactIndex - newIndex) < threshold && 
         newIndex >= 0 && 
@@ -57,7 +54,6 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
     }
   }, [containerRef, itemsLength, activeIndex]);
 
-  // Optimized scroll listener with adaptive debouncing
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -65,7 +61,6 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
     const optimizedScrollHandler = () => {
       setIsScrolling(true);
       
-      // Clear previous RAF and timeout
       if (rafRef.current) {
         cancelAnimationFrame(rafRef.current);
       }
@@ -73,23 +68,19 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
         clearTimeout(timeoutRef.current);
       }
       
-      // Use RAF for 60fps updates
       rafRef.current = requestAnimationFrame(() => {
         handleScroll();
         
-        // Adaptive timeout based on scroll velocity
-        const delay = scrollMetrics.velocity > 100 ? 150 : 50;
+        const delay = velocityRef.current > 100 ? 150 : 50;
         
         timeoutRef.current = setTimeout(() => {
           setIsScrolling(false);
           
-          // Auto-snap if needed
           const scrollTop = container.scrollTop;
           const containerHeight = container.clientHeight;
           const targetIndex = Math.round(scrollTop / containerHeight);
           const currentPosition = scrollTop / containerHeight;
           
-          // Snap if not aligned (within 20% tolerance)
           if (Math.abs(currentPosition - targetIndex) > 0.2) {
             container.scrollTo({
               top: targetIndex * containerHeight,
@@ -100,7 +91,6 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
       });
     };
 
-    // Add passive listener for better performance
     container.addEventListener('scroll', optimizedScrollHandler, {
       passive: true,
       capture: false
@@ -115,7 +105,7 @@ export const useOptimizedScroll = (containerRef, itemsLength) => {
         clearTimeout(timeoutRef.current);
       }
     };
-  }, [handleScroll, scrollMetrics.velocity]);
+  }, [handleScroll]); // removed scrollMetrics.velocity, use ref instead
 
   // Smart navigation functions
   const scrollToIndex = useCallback((targetIndex, behavior = 'smooth') => {

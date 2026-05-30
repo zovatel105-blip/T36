@@ -28,6 +28,7 @@ export const useFastFeed = (options = {}) => {
   const currentOffset = useRef(0);
   const isPreloading = useRef(false);
   const preloadedPosts = useRef([]);
+  const preloadTimeoutRef = useRef(null);
 
   // 🚀 INITIAL FAST LOAD
   const loadInitialFeed = useCallback(async () => {
@@ -52,7 +53,8 @@ export const useFastFeed = (options = {}) => {
         
         // Preload next batch in background if enabled
         if (enablePreload) {
-          setTimeout(() => {
+          clearTimeout(preloadTimeoutRef.current);
+          preloadTimeoutRef.current = setTimeout(() => {
             preloadNextBatch();
           }, 1000);
         }
@@ -113,7 +115,8 @@ export const useFastFeed = (options = {}) => {
         
         // Start preloading next batch
         if (enablePreload) {
-          setTimeout(preloadNextBatch, 500);
+          clearTimeout(preloadTimeoutRef.current);
+          preloadTimeoutRef.current = setTimeout(preloadNextBatch, 500);
         }
       } else {
         // Fetch new batch
@@ -214,6 +217,9 @@ export const useFastFeed = (options = {}) => {
   // Initialize feed on mount
   useEffect(() => {
     loadInitialFeed();
+    return () => {
+      clearTimeout(preloadTimeoutRef.current);
+    };
   }, [loadInitialFeed]);
 
   return {

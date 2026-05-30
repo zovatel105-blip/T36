@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from './ui/card';
@@ -52,6 +52,7 @@ const MediaPreview = ({ media, isWinner, isSelected, onClick, percentage, option
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [imageDecoded, setImageDecoded] = useState(false);
   const [thumbnailSrc, setThumbnailSrc] = useState(null);
 
   // 🚀 OFFLINE-FIRST: usar URI cacheada del filesystem si existe.
@@ -264,7 +265,7 @@ const MediaPreview = ({ media, isWinner, isSelected, onClick, percentage, option
             src={cachedThumbnailSrc || thumbnailSrc} 
             alt="Video thumbnail"
             loading="eager"
-            fetchPriority="high"
+            fetchpriority="high"
             decoding="async"
             onLoad={() => setImageLoaded(true)}
             onError={() => {
@@ -365,12 +366,24 @@ const MediaPreview = ({ media, isWinner, isSelected, onClick, percentage, option
       <img 
         src={cachedImageUrl || media.url} 
         alt="Poll option"
-        className="w-full h-full object-cover transition-transform duration-300"
+        loading="lazy"
+        decoding="async"
+        onLoad={(e) => {
+          setImageLoaded(true);
+          e.target.decode?.().then(() => setImageDecoded(true)).catch(() => setImageDecoded(true));
+        }}
+        className={cn(
+          "w-full h-full object-cover transition-all duration-500",
+          !imageDecoded && "scale-105 blur-lg"
+        )}
         style={media.transform ? {
           objectPosition: `${media.transform.position?.x || 50}% ${media.transform.position?.y || 50}%`,
-          transform: `scale(${media.transform.scale || 1})`,
-          transformOrigin: 'center center'
-        } : {}}
+          transform: `scale(${imageDecoded ? (media.transform.scale || 1) : 1.05})`,
+          transformOrigin: 'center center',
+          filter: imageDecoded ? 'none' : 'blur(20px)',
+        } : {
+          filter: imageDecoded ? 'none' : 'blur(20px)',
+        }}
       />
       
       {/* Progress Bar Background - Only show when user has voted on mobile */}
@@ -692,7 +705,7 @@ const PollCard = ({ poll, onVote, onLike, onShare, onComment, onSave, fullScreen
   };
 
   // YouTube-style normalized percentages that always total 100%
-  const getNormalizedPercentages = () => {
+  const normalizedPercentages = useMemo(() => {
     if (!poll.options || poll.options.length === 0 || poll.totalVotes === 0) {
       return poll.options?.map(() => 0) || [];
     }
@@ -724,9 +737,7 @@ const PollCard = ({ poll, onVote, onLike, onShare, onComment, onSave, fullScreen
     }
     
     return roundedPercentages;
-  };
-
-  const normalizedPercentages = getNormalizedPercentages();
+  }, [poll.options, poll.totalVotes, poll.id]);
 
   const getPercentage = (votes, optionIndex) => {
     if (poll.totalVotes === 0) return 0;
@@ -752,23 +763,21 @@ const PollCard = ({ poll, onVote, onLike, onShare, onComment, onSave, fullScreen
     return text.replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').trim();
   };
 
-  const hashtags = extractHashtags(poll.title);
-  const cleanTitle = getCleanTitle(poll.title);
+  const hashtags = useMemo(() => extractHashtags(poll.title), [poll.title]);
+  const cleanTitle = useMemo(() => getCleanTitle(poll.title), [poll.title]);
 
   const toggleHashtags = () => {
     setShowHashtags(!showHashtags);
   };
 
-  const getWinningOption = () => {
+  const winningOption = useMemo(() => {
     if (!poll.options || poll.options.length === 0) {
       return null;
     }
     return poll.options.reduce((max, option) => 
       option.votes > max.votes ? option : max
     );
-  };
-
-  const winningOption = getWinningOption();
+  }, [poll.options]);
 
   if (fullScreen) {
     return (
@@ -1248,4 +1257,4 @@ const PollCard = ({ poll, onVote, onLike, onShare, onComment, onSave, fullScreen
   );
 };
 
-export default PollCard;
+export default React.memo(PollCard);

@@ -11,22 +11,14 @@
  * - onCanPlay en lugar de autoPlay para arrancar solo cuando hay buffer
  *   suficiente — evita el efecto "cámara lenta" por falta de datos.
  */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { pickPlayableVideoUrl, pickPlayableHlsUrl, pickVideoPosterUrl } from '../../utils/mediaUrl';
 import resolveAssetUrl from '../../utils/resolveAssetUrl';
 import useCachedSrc from '../../hooks/useCachedSrc';
 import { cn } from '../../lib/utils';
 import HlsVideo from './HlsVideo';
 import videoMemoryManager from '../../services/videoMemoryManager';
-// 🚀 SCROLL-BACK INSTANT RESUME — guarda `currentTime` por URL durante 30 s.
-// Permite que al volver a una publicación reciente el vídeo reanude en el
-// mismo frame, replicando el `lazy-release` del videoPool TikTok-style sin
-// requerir un pool imperativo de elementos.
 import videoTimeCache from '../../lib/videoTimeCache';
-// 🚀 FIX BOTTLENECK #3 — Fast-scroll suspension. Cuando el usuario hace
-// flick rápido y cascadas de swipes, los slots PREV/NEXT suspenden HLS
-// (manifest + primer segmento) para no malgastar bandwidth en contenido
-// que va a saltar.
 import { useFastScrolling } from '../../utils/scrollVelocityTracker';
 // 🆕 Fase C — Defensa en profundidad: cuando el backend NO mandó
 // thumbnail_url (típico de VS legacy con vs_questions[].options[] sin
@@ -37,6 +29,36 @@ import { generatePosterDataUrl } from '../../utils/canvasPoster';
 const VIDEO_MAX_BYTES_DEFAULT = 25 * 1024 * 1024; // 25 MB
 
 const VIDEO_URL_RE = /\.(mp4|mov|webm|avi|m4v)(\?|$)/i;
+
+// ── DECODER BUDGET DINÁMICO ─────────────────────────────────────────────────
+// Android gama media típicamente permite 2-4 decoders H.264 hw simultáneos.
+// En iOS/Safari el limite suele ser 4-6. Detectamos la capacidad del device
+// en el momento de montar el componente y limitamos cuántos `<video>` pueden
+// estar activos al mismo tiempo.
+// Layout normal: videoTagMaxDistance = 1 (solo CUR + NEXT) para no saturar.
+// Layout VS: videoTagMaxDistance = 1 (ya es así) pero los 2 lados cuentan doble.
+const getDecoderBudget = () => {
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory = navigator.deviceMemory || 4;
+  const saveData = navigator.connection?.saveData === true;
+  const effType = navigator.connection?.effectiveType;
+  if (saveData || memory <= 2 || cores <= 2) return { maxDistance: 0, allowPosterOnly: true };
+  if (effType && ['slow-2g', '2g'].includes(effType)) return { maxDistance: 0, allowPosterOnly: true };
+  if (memory >= 6 && cores >= 6) return { maxDistance: 2, allowPosterOnly: false };
+  if (effType === '3g') return { maxDistance: 1, allowPosterOnly: true };
+  return { maxDistance: 2, allowPosterOnly: true };
+};
+
+function useDecoderBudget() {
+  const [budget, setBudget] = useState(getDecoderBudget);
+  useEffect(() => {
+    const onchange = () => setBudget(getDecoderBudget());
+    const conn = navigator.connection;
+    if (conn) conn.addEventListener('change', onchange);
+    return () => { if (conn) conn.removeEventListener('change', onchange); };
+  }, []);
+  return budget;
+}
 
 // ── POSTER TRANSPARENTE (1×1 negro) ────────────────────────────────────────
 // SVG inline pasado como `poster=` al <video> para BLOQUEAR el placeholder
@@ -93,6 +115,7 @@ const PollOptionMedia = ({
   const isVideo = isVideoOption(option);
   const internalVideoRef = useRef(null);
   const videoEl = externalVideoRef || internalVideoRef;
+  const decoderBudget = useDecoderBudget();
 
   // URLs originales
   const rawVideoSrc = isVideo ? pickPlayableVideoUrl(option) : null;
@@ -281,9 +304,16 @@ const PollOptionMedia = ({
     } else {
       // Slot NO activo: pausar para liberar decoder hardware (crítico en
       // Android gama media donde solo hay 2-4 decoders H.264 simultáneos).
-      // Mantenemos el buffer ya descargado (no llamamos .load() ni .src='').
       if (!v.paused) {
         try { v.pause(); } catch (_) {}
+      }
+      // ⚡ distance > 2: liberar memoria del video también (no solo pausar).
+      // El pool lo reciclará y recargará si el usuario vuelve atrás.
+      if (distanceFromActive > 2 && v.readyState > 0) {
+        try {
+          v.removeAttribute('src');
+          v.load();
+        } catch (_) {}
       }
       return undefined;
     }
@@ -531,7 +561,8 @@ const PollOptionMedia = ({
     // Android WebView gama media solo soporta 2-4 decoders H.264 hw
     // simultáneos; pasar el límite causa freezing del video activo.
     // Con distance=2 mantenemos un buffer de pre-warm sin saturar.
-    const videoTagMaxDistance = layout === 'vs' ? 1 : 2;
+    const isLayoutVS = layout === 'vs';
+    const videoTagMaxDistance = isLayoutVS ? 1 : decoderBudget.maxDistance;
     const shouldRenderVideoTag = distanceFromActive <= videoTagMaxDistance;
 
     if (!videoSrc || !shouldRenderVideoTag) {
@@ -541,22 +572,18 @@ const PollOptionMedia = ({
             'relative w-full h-full overflow-hidden bg-gradient-to-br from-gray-700 to-gray-900',
             className
           )}
-          style={style}
+          style={{ ...style, contain: 'strict', contentVisibility: distanceFromActive > 2 ? 'auto' : 'visible' }}
         >
           {posterSrc && (
             <img
               src={posterSrc}
               alt=""
               draggable={false}
-              // Slot lejano (distance > 3): el <video> ya no se monta,
-              // solo se muestra el poster. Lo bajamos a prioridad mínima
-              // para que NUNCA compita con thumbnails del slot activo/+1.
-              // `loading="lazy"` deja al browser decidir cuándo descargar
-              // según viewport — incluso este poster puede saltarse.
               fetchpriority="low"
-              loading="lazy"
+              loading={distanceFromActive <= 2 ? 'eager' : 'lazy'}
               decoding="async"
               className="w-full h-full object-cover"
+              style={{ transform: 'translateZ(0)' }}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
           )}
@@ -567,18 +594,10 @@ const PollOptionMedia = ({
     return (
       <div
         className={cn(
-          // 🎨 FIX BLACK-SCREEN: gradiente brand como fallback cuando el
-          // poster del backend tarda en descargar. ANTES: el contenedor
-          // heredaba `bg-black` del card → pantalla NEGRA mientras el
-          // poster cargaba (0-500ms en primer acceso). AHORA: el usuario
-          // SIEMPRE ve un gradiente coherente con la marca, incluso si el
-          // poster nunca llega (offline, error 404, etc.). El poster se
-          // pinta encima cuando carga; el primer frame de video se pinta
-          // encima del poster cuando llega.
           'relative w-full h-full overflow-hidden bg-gradient-to-br from-purple-950 via-fuchsia-950 to-pink-950',
           className,
         )}
-        style={style}
+        style={{ ...style, contain: 'layout style paint', contentVisibility: distanceFromActive > 1 ? 'auto' : 'visible' }}
       >
         {/* Poster visible hasta que el video tiene SU PRIMER FRAME pintado.
             Hace crossfade con el video cuando hasFirstFrame=true.
@@ -759,4 +778,4 @@ const PollOptionMedia = ({
   );
 };
 
-export default PollOptionMedia;
+export default React.memo(PollOptionMedia);

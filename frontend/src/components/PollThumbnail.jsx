@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { Check, Play } from 'lucide-react';
 import AppConfig from '../config/config';
 import LayoutRenderer from './layouts/LayoutRenderer';
@@ -203,6 +203,7 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
             alt={altText}
             className={imgClassName}
             loading="lazy"
+            decoding="async"
             onError={(e) => { e.target.style.display = 'none'; }}
           />
           {isVideo && (
@@ -244,22 +245,24 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
     return null;
   };
 
-  console.log('PollThumbnail Debug:', {
-    pollId: result?.id,
-    layout,
-    optionsCount: options.length,
-    options: options.map(opt => {
-      const f = getMediaFields(opt);
-      return {
-        text: opt.text,
-        media_type: f.type,
-        has_media_url: !!f.url,
-        has_thumbnail_url: !!f.thumbnail,
-        media_url_resolved: resolveUrl(f.url)?.substring(0, 60),
-        thumbnail_url_resolved: resolveUrl(f.thumbnail)?.substring(0, 60),
-      };
-    })
-  });
+  if (process.env.NODE_ENV === 'development') {
+    console.log('PollThumbnail Debug:', {
+      pollId: result?.id,
+      layout,
+      optionsCount: options.length,
+      options: options.map(opt => {
+        const f = getMediaFields(opt);
+        return {
+          text: opt.text,
+          media_type: f.type,
+          has_media_url: !!f.url,
+          has_thumbnail_url: !!f.thumbnail,
+          media_url_resolved: resolveUrl(f.url)?.substring(0, 60),
+          thumbnail_url_resolved: resolveUrl(f.thumbnail)?.substring(0, 60),
+        };
+      })
+    });
+  }
 
   const optionsWithMedia = options.filter(option => {
     const f = getMediaFields(option);
@@ -349,6 +352,8 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
                           src={bgSrc}
                           alt={option.text || `Option ${index + 1}`}
                           className="absolute inset-0 w-full h-full object-cover"
+                          loading="lazy"
+                          decoding="async"
                         />
                       )}
                       <div className={`absolute inset-0 transition-all duration-150 ${isSelected ? 'bg-blue-500/40' : 'bg-black/30'}`} />
@@ -432,6 +437,8 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
                           src={bgSrc}
                           alt={option.text || `Option ${index + 1}`}
                           className="absolute inset-0 w-full h-full object-cover"
+                          loading="lazy"
+                          decoding="async"
                         />
                       )}
                       <div className={`absolute inset-0 transition-all duration-150 ${isSelected ? 'bg-blue-500/40' : 'bg-black/30'}`} />
@@ -587,6 +594,7 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
                       alt={option.text || `Option ${index + 1}`}
                       className="w-full h-full object-cover"
                       loading="lazy"
+                      decoding="async"
                       onError={(e) => { e.target.style.display = 'none'; }}
                     />
                     {isVideo && (
@@ -693,8 +701,10 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
                     {bgSrc && (
                       <img
                         src={bgSrc}
-                        alt={option.text || `Option ${index + 1}`}
+                        alt={option.text || `Option ${option.index + 1}`}
                         className="absolute inset-0 w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     )}
                     <div className={`absolute inset-0 transition-all duration-150 ${isSelected ? 'bg-blue-500/40' : 'bg-black/30'}`} />
@@ -729,4 +739,4 @@ const PollThumbnail = ({ result, className = "", onClick, hideBadge = false, onQ
   );
 };
 
-export default PollThumbnail;
+export default React.memo(PollThumbnail);

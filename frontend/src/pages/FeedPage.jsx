@@ -41,12 +41,32 @@ const FeedPage = () => {
   const hydratedSnapshot = getFeedSnapshot();
   const hasHydrated = useRef(Boolean(hydratedSnapshot && hydratedSnapshot.polls?.length));
 
+  // ⚡ SKELETON: generar N placeholders instantáneos para renderizar
+  // TikTokScrollView en el mismo frame, SIN esperar al backend.
+  // El fetch real reemplaza estos skeletons progresivamente.
+  // En conexión lenta usamos más skeletons para dar margen; en rápida menos.
+  const { isOnline, isSlowConnection, effectiveType } = useNetworkStatus();
+  const SKELETON_COUNT = isSlowConnection ? 20 : 15;
+  const generateSkeletons = () => Array.from({ length: SKELETON_COUNT }, (_, i) => ({
+    id: `skeleton-${i}`,
+    isSkeleton: true,
+    title: '',
+    options: [],
+    author: {},
+    totalVotes: 0,
+    likes: 0,
+    shares: 0,
+    comments_count: 0,
+    saves_count: 0,
+    music: null,
+    layout: null,
+    created_at: new Date().toISOString(),
+  }));
+
   const [polls, setPolls] = useState(
-    hydratedSnapshot?.polls?.length ? hydratedSnapshot.polls : []
+    hydratedSnapshot?.polls?.length ? hydratedSnapshot.polls : generateSkeletons()
   );
-  const [isLoading, setIsLoading] = useState(
-    hydratedSnapshot?.polls?.length ? false : true
-  );
+  const [isLoading, setIsLoading] = useState(false); // ← YA NO HAY SPINNER
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreContent, setHasMoreContent] = useState(
     hydratedSnapshot ? hydratedSnapshot.hasMoreContent ?? true : true
@@ -55,12 +75,14 @@ const FeedPage = () => {
   const [currentPage, setCurrentPage] = useState(
     hydratedSnapshot?.currentPage ?? 0
   );
+  const skeletonsRenderedRef = useRef(false); // para refresh único
+
   const [savedPolls, setSavedPolls] = useState(
     hydratedSnapshot?.savedPolls ? new Set(hydratedSnapshot.savedPolls) : new Set()
   );
   
   // 🚀 SPEED OPTIMIZATION: Simple cache for faster subsequent loads
-  const [pollsCache, setPollsCache] = useState(new Map());
+  const [pollsCache, setPollsCache] = useState(() => new Map());
   const [showCommentsModal, setShowCommentsModal] = useState(false);
   const [selectedPollId, setSelectedPollId] = useState(null);
   const [selectedPollTitle, setSelectedPollTitle] = useState('');
@@ -80,7 +102,6 @@ const FeedPage = () => {
   const { enterTikTokMode, exitTikTokMode, isTikTokMode } = useTikTok();
   const { shareModal, sharePoll, closeShareModal } = useShare();
   const { isAuthenticated, user } = useAuth();
-  const { isOnline } = useNetworkStatus();
 
   // Detect if we're on mobile or desktop
   const [isMobile, setIsMobile] = useState(window.innerWidth < 1024);
@@ -146,172 +167,86 @@ const FeedPage = () => {
     Promise.all(Array.from({ length: CONCURRENCY }, () => worker())).catch(() => {});
   }, [polls]);
 
-  // Load polls from backend
+  // Load polls from backend — SIN SPINNER, reemplaza skeletons silenciosamente
   useEffect(() => {
     const loadPolls = async () => {
-      // TEMPORAL: Force load polls regardless of auth state to test mentions
-      // if (!isAuthenticated) {
-      //   setIsLoading(false);
-      //   return;
-      // }
-
-      // 🎯 Si hidratamos del snapshot, saltamos el load inicial y no perdemos
-      // la posición del usuario (continúa viendo el mismo post).
       if (hasHydrated.current && !searchParams.get('post')) {
-        console.log('🔄 FeedPage hidratado desde snapshot — saltando loadPolls inicial');
-        hasHydrated.current = false; // solo en el primer montaje
-        setIsLoading(false);
+        hasHydrated.current = false;
+        skeletonsRenderedRef.current = true;
+        // Background refresh incluso para snapshot
+        pollService.getPollsForFrontend({ limit: 30 }).then(fresh => {
+          if (Array.isArray(fresh) && fresh.length > 0) setPolls(fresh);
+        }).catch(() => {});
         return;
       }
 
-      try {
-        setIsLoading(true);
-        setError(null);
-        setCurrentPage(0);  // Reset pagination
-        setHasMoreContent(true);  // Reset content availability
-        
-        // 🚀 SPEED: Check cache first for faster loads
-        const cacheKey = 'feed_initial_30';
-        const cachedPolls = pollsCache.get(cacheKey);
-        const cacheAge = Date.now() - (cachedPolls?.timestamp || 0);
-        
-        // Use cache if less than 2 minutes old
-        if (cachedPolls && cacheAge < 120000) {
-          console.log('⚡ Using cached polls (fast load)');
+      const cacheKey = 'feed_initial_30';
+      
+      // ⚡ FASE 1: Intentar cache en memoria (ultra rápido)
+      const cachedPolls = pollsCache.get(cacheKey);
+      if (cachedPolls && (Date.now() - cachedPolls.timestamp) < 120000) {
+        if (cachedPolls.data.some(p => !p.isSkeleton)) {
           setPolls(cachedPolls.data);
-          setIsLoading(false);
-          
-          // Load fresh data in background
-          pollService.getPollsForFrontend({ limit: 30 }).then(freshData => {
-            // 🔧 OFFLINE FIX: solo reemplazamos el feed actual si el refresh
-            // trajo datos. Si vino vacío (raro online; típico offline) o si
-            // pollService lanzó error → mantenemos lo que ya teníamos.
-            if (!Array.isArray(freshData) || freshData.length === 0) {
-              console.warn('⚠️ Background refresh returned empty — keeping cached polls');
-              return;
-            }
-            setPollsCache(prev => new Map(prev.set(cacheKey, {
-              data: freshData,
-              timestamp: Date.now()
-            })));
-            setPolls(freshData);
-            // 💾 Persistir en disco para el proximo arranque / offline
-            feedCache.setCachedFeed(freshData, 'main').catch(() => {});
-          }).catch((err) => {
-            // No tocar polls si el refresh falló (probablemente offline)
-            console.warn('[FeedPage] background refresh failed (offline?):', err?.message);
-          });
-          
-          return;
         }
+        // Fetch fresco en background
+        pollService.getPollsForFrontend({ limit: 30 }).then(freshData => {
+          if (!Array.isArray(freshData) || freshData.length === 0) return;
+          setPollsCache(prev => new Map(prev.set(cacheKey, { data: freshData, timestamp: Date.now() })));
+          setPolls(freshData);
+          feedCache.setCachedFeed(freshData, 'main').catch(() => {});
+        }).catch(() => {});
+        skeletonsRenderedRef.current = true;
+        return;
+      }
 
-        // 💾 PRIMERA CARGA: intentar cache PERSISTENTE (disco) antes de la red.
-        // Asi, al reabrir la app (incluso sin red) se renderiza instantaneo el
-        // ultimo feed visto. Si hay red, despues refrescamos.
+      // ⚡ FASE 2: Intentar cache persistente (disco)
+      try {
         const diskCache = await feedCache.getCachedFeed('main');
         if (diskCache && diskCache.polls.length > 0) {
-          console.log(`💾 FeedPage: hidratado desde disco (${diskCache.polls.length} posts, age=${Math.round(diskCache.age / 1000)}s)`);
+          setPollsCache(prev => new Map(prev.set(cacheKey, { data: diskCache.polls, timestamp: Date.now() })));
           setPolls(diskCache.polls);
-          setIsLoading(false);
-          // Si el cache es suficientemente reciente y ya estamos online,
-          // aun asi pedimos los nuevos en background para mantenerlo al dia.
+          // Refresh en background
           pollService.getPollsForFrontend({ limit: 30 }).then(freshData => {
-            // 🔧 OFFLINE FIX: nunca sobrescribir el feed cacheado con []
-            // (caso típico cuando el refresh corre offline).
-            if (!Array.isArray(freshData) || freshData.length === 0) {
-              console.warn('⚠️ Background refresh returned empty — keeping cached polls');
-              return;
-            }
-            setPollsCache(prev => new Map(prev.set(cacheKey, {
-              data: freshData,
-              timestamp: Date.now()
-            })));
+            if (!Array.isArray(freshData) || freshData.length === 0) return;
+            setPollsCache(prev => new Map(prev.set(cacheKey, { data: freshData, timestamp: Date.now() })));
             setPolls(freshData);
             feedCache.setCachedFeed(freshData, 'main').catch(() => {});
-          }).catch((err) => {
-            console.warn('[FeedPage] refresh en background fallo (probablemente offline):', err?.message);
-          });
+          }).catch(() => {});
+          skeletonsRenderedRef.current = true;
           return;
         }
+      } catch (_) {}
 
+      // ⚡ FASE 3: No hay cache — los skeletons ya están visibles.
+      // Fetch desde red en background.
+      try {
         const pollsData = await pollService.getPollsForFrontend({ limit: 30 });
-        
-        // 🚀 CACHE: Store for next time
-        setPollsCache(prev => new Map(prev.set(cacheKey, {
-          data: pollsData,
-          timestamp: Date.now()
-        })));
-        // 💾 Persistir en disco para los siguientes arranques
-        feedCache.setCachedFeed(pollsData, 'main').catch(() => {});
-        console.log('🔍 FeedPage loaded polls:', pollsData.map(p => ({
-          title: p.title, 
-          mentioned_users: p.mentioned_users ? p.mentioned_users.length : 0
-        })));
-        console.log('📊 Total polls received from backend:', pollsData.length);
-        console.log('🔍 Backend polls sample:', pollsData.slice(0, 3).map(p => ({ id: p.id, title: p.title, author: p.author?.username })));
-        setPolls(pollsData);
-        console.log('📊 Polls set in state, length:', pollsData.length);
-        console.log('🔍 State polls sample after setting:', pollsData.slice(0, 3).map(p => ({ id: p.id, title: p.title, author: p.author?.username })));
-        
-        // Check if there's a specific post ID in the URL
-        const postId = searchParams.get('post');
-        if (postId) {
-          console.log('🎯 Looking for specific post:', postId);
+        if (Array.isArray(pollsData) && pollsData.length > 0) {
+          setPollsCache(prev => new Map(prev.set(cacheKey, { data: pollsData, timestamp: Date.now() })));
+          setPolls(pollsData);
+          feedCache.setCachedFeed(pollsData, 'main').catch(() => {});
           
-          // Find the post in the loaded polls
-          const postIndex = pollsData.findIndex(poll => poll.id === postId);
-          
-          if (postIndex !== -1) {
-            console.log('✅ Found post at index:', postIndex);
-            setInitialIndex(postIndex);
-          } else {
-            console.log('⚠️ Post not found in feed, loading individual post...');
-            // If post not found in feed, load it individually
-            try {
-              const specificPost = await pollService.getPollById(postId);
-              if (specificPost) {
-                // Add the specific post to the beginning of the array
-                const updatedPolls = [specificPost, ...pollsData];
-                setPolls(updatedPolls);
-                setInitialIndex(0);
-                console.log('✅ Specific post loaded and added to feed');
-              }
-            } catch (err) {
-              console.error('Error loading specific post:', err);
-              toast({
-                title: t('feed.toast.notFoundTitle'),
-                description: t('feed.toast.notFoundDesc'),
-                variant: "destructive",
-              });
+          // Check for specific post in URL
+          const postId = searchParams.get('post');
+          if (postId) {
+            const postIndex = pollsData.findIndex(poll => poll.id === postId);
+            if (postIndex !== -1) {
+              setInitialIndex(postIndex);
             }
           }
         }
       } catch (err) {
-        console.error('Error loading polls:', err);
-        // 🛡️ ÚLTIMA RED DE SEGURIDAD: si la red falló (típico offline) pero
-        // tenemos algo en disco (incluso poco fresco o de otra clave),
-        // hidratamos con eso ANTES de mostrar el error. Esto evita ver la
-        // pantalla "Sin conexión" en falso cuando hay caché disponible.
+        // Fallback a cache de disco aunque sea viejo
         try {
-          const fallbackCache = await feedCache.getCachedFeed('main');
-          if (fallbackCache && fallbackCache.polls.length > 0) {
-            console.warn(`🛟 [FeedPage] Recovered ${fallbackCache.polls.length} cached polls from fallback (offline)`);
-            setPolls(fallbackCache.polls);
-            setIsLoading(false);
+          const fallback = await feedCache.getCachedFeed('main');
+          if (fallback && fallback.polls.length > 0) {
+            setPolls(fallback.polls);
             return;
           }
-        } catch (cacheErr) {
-          console.warn('[FeedPage] fallback cache read failed:', cacheErr);
-        }
+        } catch (_) {}
         setError(err.message);
-        toast({
-          title: t('feed.toast.errorLoadTitle'),
-          description: t('feed.toast.loadErrorDesc'),
-          variant: "destructive",
-        });
-      } finally {
-        setIsLoading(false);
       }
+      skeletonsRenderedRef.current = true;
     };
 
     loadPolls();
@@ -398,15 +333,15 @@ const FeedPage = () => {
       // No bloquear UX si el prefetch falla
       console.debug('[FeedPage] thumbnail prefetch skipped:', err?.message);
     }
-    // 💾 Prefetch PERSISTENTE de los vídeos de los próximos 4 posts (para
-    // que estén disponibles offline al reabrir la APK sin red, estilo
-    // Instagram/TikTok).
+    // 💾 Prefetch PERSISTENTE de los vídeos de los próximos posts.
+    // En conexión lenta reducimos el lookahead para no saturar ancho de banda.
+    const videoLookahead = isSlowConnection ? 2 : 4;
     try {
-      feedMediaPrefetcher.prefetchVideosAroundIndex(polls, newIndex, 4);
+      feedMediaPrefetcher.prefetchVideosAroundIndex(polls, newIndex, videoLookahead);
     } catch (err) {
       console.debug('[FeedPage] video prefetch skipped:', err?.message);
     }
-  }, [polls]);
+  }, [polls, isSlowConnection]);
 
   // 📥 Al cargar/cambiar la lista de polls, prefetchar los primeros 3 thumbnails
   // inmediatamente (antes siquiera de que el usuario scrollee) — esto es lo que
@@ -490,52 +425,41 @@ const FeedPage = () => {
   });
 
   // Preload more content when user is near the end
-  const loadMorePolls = async () => {
+  const loadMorePolls = useCallback(async () => {
     if (isLoadingMore || !hasMoreContent) return;
 
-    console.log('🔄 Loading more polls - current page:', currentPage);
     setIsLoadingMore(true);
 
     try {
       const nextPage = currentPage + 1;
       const pollsData = await pollService.getPollsForFrontend({ 
-        limit: 20, // Load 20 more polls
-        offset: nextPage * 30  // Skip already loaded polls (initial 30 + 20*page)
+        limit: 20,
+        offset: nextPage * 30
       });
 
-      console.log('📊 Additional polls loaded:', pollsData.length);
-
-      if (pollsData.length === 0) {
+      if (!Array.isArray(pollsData) || pollsData.length === 0) {
         setHasMoreContent(false);
-        console.log('🏁 No more content available');
         return;
       }
 
-      // Filter out duplicates in case there's overlap
       const existingIds = new Set(polls.map(poll => poll.id));
       const newPolls = pollsData.filter(poll => !existingIds.has(poll.id));
 
       if (newPolls.length > 0) {
         setPolls(prevPolls => [...prevPolls, ...newPolls]);
         setCurrentPage(nextPage);
-        console.log('✅ Added', newPolls.length, 'new polls. Total polls:', polls.length + newPolls.length);
-      } else {
-        console.log('⚠️ No new polls to add (all duplicates)');
       }
 
-      // If we got fewer than requested, we're probably near the end
       if (pollsData.length < 20) {
         setHasMoreContent(false);
-        console.log('🏁 Received fewer polls than requested - marking as end of content');
       }
 
     } catch (error) {
       console.error('❌ Error loading more polls:', error);
-      // Don't show error toast to user, just silently fail preloading
     } finally {
       setIsLoadingMore(false);
     }
-  };
+  }, [isLoadingMore, hasMoreContent, pollService, currentPage, polls, setPolls, setIsLoadingMore, setCurrentPage, setHasMoreContent]);
 
   // Handle navigation state for pre-selected audio
   useEffect(() => {
@@ -572,7 +496,7 @@ const FeedPage = () => {
     };
   }, [isMobile, enterTikTokMode, exitTikTokMode]);
 
-  const handleVote = async (pollId, optionId) => {
+  const handleVote = useCallback(async (pollId, optionId) => {
     if (!isAuthenticated) {
       toast({
         title: t('feed.toast.loginRequired'),
@@ -676,9 +600,9 @@ const FeedPage = () => {
         variant: "destructive",
       });
     }
-  };
+  }, [isAuthenticated, toast, t, polls, pollService, trackAction, setPolls]);
 
-  const handleLike = async (pollId) => {
+  const handleLike = useCallback(async (pollId) => {
     if (!isAuthenticated) {
       toast({
         title: t('feed.toast.loginRequired'),
@@ -759,9 +683,9 @@ const FeedPage = () => {
         variant: "destructive",
       });
     }
-  };
+  }, [isAuthenticated, toast, t, pollService, trackAction, setPolls]);
 
-  const handleShare = async (pollId) => {
+  const handleShare = useCallback(async (pollId) => {
     if (!isAuthenticated) {
       toast({
         title: t('feed.toast.loginRequired'),
@@ -825,9 +749,9 @@ const FeedPage = () => {
         variant: "destructive",
       });
     }
-  };
+  }, [isAuthenticated, toast, t, pollService, setPolls, trackAction, polls, sharePoll]);
 
-  const handleComment = async (pollId) => {
+  const handleComment = useCallback(async (pollId) => {
     await trackAction('create');
     const poll = polls.find(p => p.id === pollId);
     if (poll) {
@@ -836,9 +760,9 @@ const FeedPage = () => {
       setSelectedPollAuthor(poll.author);
       setShowCommentsModal(true);
     }
-  };
+  }, [trackAction, polls, setSelectedPollId, setSelectedPollTitle, setSelectedPollAuthor, setShowCommentsModal]);
 
-  const handleSave = async (pollId) => {
+  const handleSave = useCallback(async (pollId) => {
     console.log('🔖 FeedPage: handleSave called with pollId:', pollId);
     console.log('🔖 FeedPage: process.env.REACT_APP_BACKEND_URL:', process.env.REACT_APP_BACKEND_URL);
     console.log('🔖 FeedPage: window.location.origin:', window.location.origin);
@@ -938,7 +862,7 @@ const FeedPage = () => {
         duration: 5000,  
       });
     }
-  };
+  }, [savedPolls, toast, t, trackAction, setPolls, setSavedPolls]);
 
   const handleExitTikTok = () => {
     // No hacer nada, ya que queremos mantener siempre el modo TikTok en el feed
@@ -946,7 +870,7 @@ const FeedPage = () => {
     return;
   };
 
-  const handleCreatePoll = async (newPoll) => {
+  const handleCreatePoll = useCallback(async (newPoll) => {
     if (!isAuthenticated) {
       toast({
         title: t('feed.toast.loginRequired'),
@@ -973,78 +897,35 @@ const FeedPage = () => {
         variant: "destructive",
       });
     }
-  };
+  }, [isAuthenticated, toast, t, pollService, setPolls, trackAction]);
 
-  // DEBUG: Log component state at render start
-  console.log('🎬 FeedPage RENDER START:');
-  console.log('📊 Current polls.length:', polls.length);
-  console.log('💾 isLoading:', isLoading, 'error:', error);
-  console.log('🔍 First 2 polls:', polls.slice(0, 2).map(p => ({ 
-    id: p?.id, 
-    title: p?.title?.substring(0, 50), 
-    hasOptions: !!p?.options?.length,
-    hasAuthor: !!(p?.author || p?.authorUser)
-  })));
-
-  if (isLoading) {
-    return (
-      <>
-        {/* Logo fijo SIEMPRE VISIBLE - Loading */}
-        <div 
-          className="fixed top-4 right-4 z-[9999] flex items-center justify-center w-10 h-10"
-          style={{ 
-            position: 'fixed',
-            top: 'max(16px, calc(var(--safe-area-inset-top) + 8px))',
-            right: '16px',
-            zIndex: 9999,
-          }}
-        >
-          <LogoWithQuickActions size={95} />
-        </div>
-
-        {/* 🛜 Toast "Sin conexión" — sólo en Feed (Para Ti) */}
-        <FeedOfflineToast />
-        
-        <div className="fixed inset-0 z-50 bg-black flex items-center justify-center">
-          <div className="text-center">
-            <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4"></div>
-            <h2 className="text-xl font-semibold text-white">{t('feed.loadingTitle')}</h2>
-            <p className="text-white/70 mt-2">{t('feed.loadingDesc')}</p>
-          </div>
-        </div>
-      </>
-    );
+  if (process.env.NODE_ENV === 'development') {
+    console.log('🎬 FeedPage RENDER START:');
+    console.log('📊 Current polls.length:', polls.length);
+    console.log('💾 isLoading:', isLoading, 'error:', error);
+    console.log('🔍 First 2 polls:', polls.slice(0, 2).map(p => ({ 
+      id: p?.id, 
+      title: p?.title?.substring(0, 50), 
+      hasOptions: !!p?.options?.length,
+      hasAuthor: !!(p?.author || p?.authorUser)
+    })));
   }
 
-  // Show error state — si estamos offline mostramos UI amigable de "Sin conexión"
-  if (error && !isLoading) {
+  // ⚡ SIN SPINNER: el feed se renderiza siempre con skeletons como fallback
+  // El error solo bloquea si no tenemos NINGÚN poll (ni siquiera skeletons)
+  if (error && polls.every(p => p.isSkeleton)) {
     const offlineMode = !isOnline;
     return (
       <>
-        {/* Logo fijo SIEMPRE VISIBLE - Error State */}
-        <div 
-          className="fixed top-4 right-4 z-[9999] flex items-center justify-center w-10 h-10"
-          style={{ 
-            position: 'fixed',
-            top: 'max(16px, calc(var(--safe-area-inset-top) + 8px))',
-            right: '16px',
-            zIndex: 9999,
-          }}
-        >
+        <div className="fixed top-4 right-4 z-[9999] flex items-center justify-center w-10 h-10"
+          style={{ position: 'fixed', top: 'max(16px, calc(var(--safe-area-inset-top) + 8px))', right: '16px', zIndex: 9999 }}>
           <LogoWithQuickActions size={95} />
         </div>
-
-        {/* 🛜 Toast "Sin conexión" — sólo en Feed (Para Ti) */}
         <FeedOfflineToast />
-        
         <div className="fixed inset-0 z-50 bg-gradient-to-b from-zinc-900 via-zinc-950 to-black flex items-center justify-center">
           <div className="text-center px-6 max-w-sm">
-            <div className={cn(
-              "w-32 h-32 rounded-full flex items-center justify-center mx-auto mb-8",
-              offlineMode
-                ? "bg-gradient-to-br from-zinc-700 to-zinc-900"
-                : "bg-gray-800"
-            )}>
+            <div className={cn("w-32 h-32 rounded-full flex items-center justify-center mx-auto mb-8",
+              offlineMode ? "bg-gradient-to-br from-zinc-700 to-zinc-900" : "bg-gray-800")}>
               {offlineMode ? (
                 <svg className="w-16 h-16 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636L5.636 18.364m12.728 0L5.636 5.636M12 4a8 8 0 100 16 8 8 0 000-16z" />
@@ -1058,15 +939,8 @@ const FeedPage = () => {
             <h3 className="text-3xl font-bold text-white mb-4">
               {offlineMode ? t('feed.offlineTitle') : t('feed.errorTitle')}
             </h3>
-            <p className="text-white/70 text-base mb-6">
-              {offlineMode
-                ? t('feed.offlineDesc')
-                : error}
-            </p>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-6 py-3 bg-purple-500 text-white rounded-full font-medium hover:bg-purple-600 transition-colors"
-            >
+            <p className="text-white/70 text-base mb-6">{offlineMode ? t('feed.offlineDesc') : error}</p>
+            <button onClick={() => window.location.reload()} className="px-6 py-3 bg-purple-500 text-white rounded-full font-medium hover:bg-purple-600 transition-colors">
               {t('feed.retry')}
             </button>
           </div>
@@ -1076,7 +950,7 @@ const FeedPage = () => {
   }
 
   // Si no hay autenticación, redirigir o mostrar login
-  if (!isAuthenticated && !isLoading) {
+  if (!isAuthenticated && !polls.some(p => !p.isSkeleton)) {
     return (
       <>
         {/* Logo fijo SIEMPRE VISIBLE - Auth Required */}
@@ -1116,15 +990,16 @@ const FeedPage = () => {
     );
   }
   
-  // DEBUG: Log polls state before empty check
-  console.log('🚨 DEBUG: Checking polls state before empty check:');
-  console.log('📊 Current polls.length:', polls.length);
-  console.log('🔍 Current polls sample:', polls.slice(0, 3).map(p => ({ 
-    id: p?.id, 
-    title: p?.title, 
-    author: p?.author?.username || p?.authorUser?.username,
-    type: typeof p
-  })));
+  if (process.env.NODE_ENV === 'development') {
+    console.log('🚨 DEBUG: Checking polls state before empty check:');
+    console.log('📊 Current polls.length:', polls.length);
+    console.log('🔍 Current polls sample:', polls.slice(0, 3).map(p => ({ 
+      id: p?.id, 
+      title: p?.title, 
+      author: p?.author?.username || p?.authorUser?.username,
+      type: typeof p
+    })));
+  }
   console.log('💾 isLoading:', isLoading, 'error:', error);
   
   if (polls.length === 0) {
@@ -1256,7 +1131,7 @@ const FeedPage = () => {
 
         {/* Feed Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {polls.map((poll) => (
+          {polls.filter(p => !p.isSkeleton).map((poll) => (
             <div key={poll.id} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
               <PollCard
                 poll={poll}

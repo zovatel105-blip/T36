@@ -39,6 +39,7 @@ import storyService from '../services/storyService';
 import { useNavPreference } from '../hooks/useNavPreference';
 import { useTikTok } from '../contexts/TikTokContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
+import useUltraSmoothFeed from '../hooks/useUltraSmoothFeed';
 import { setFastScrolling } from '../utils/scrollVelocityTracker';
 
 // Helper function to render text with clickable hashtags
@@ -917,6 +918,35 @@ const TikTokPollCardInner = ({
     );
   };
 
+  // ─── SKELETON: render instantáneo mientras carga datos reales ──────
+  if (poll?.isSkeleton) {
+    return (
+      <div className="absolute inset-0 w-full h-full bg-black overflow-hidden" style={{ height: '100dvh', contain: 'strict' }}>
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)' }}>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
+        </div>
+        {/* Barra superior */}
+        <div className="absolute top-0 left-0 right-0 flex items-center px-4 z-10" style={{ top: 'max(1rem, env(safe-area-inset-top, 8px))' }}>
+          <div className="w-10 h-10 rounded-full bg-white/10" />
+          <div className="ml-3 space-y-2">
+            <div className="w-24 h-3 rounded bg-white/10" />
+            <div className="w-16 h-2 rounded bg-white/5" />
+          </div>
+        </div>
+        {/* Placeholder central */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-48 h-48 rounded-2xl bg-white/5" />
+        </div>
+        {/* Barra inferior */}
+        <div className="absolute bottom-28 left-0 right-0 flex flex-col items-center gap-4">
+          <div className="w-12 h-12 rounded-full bg-white/10" />
+          <div className="w-12 h-12 rounded-full bg-white/10" />
+          <div className="w-12 h-12 rounded-full bg-white/10" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full h-full flex flex-col relative bg-black overflow-hidden">
       
@@ -1738,11 +1768,12 @@ const TikTokScrollView = ({
   onSwipeStart = null, storiesOverlayOpen = false, onRefresh = null,
 }) => {
   const containerRef = useRef(null);
+  useUltraSmoothFeed({ enabled: true, containerRef });
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const [lastActiveIndex, setLastActiveIndex] = useState(initialIndex);
-  const [savedPolls, setSavedPolls] = useState(new Set());
-  const [commentedPolls, setCommentedPolls] = useState(new Set());
-  const [sharedPolls, setSharedPolls] = useState(new Set());
+  const [savedPolls, setSavedPolls] = useState(() => new Set());
+  const [commentedPolls, setCommentedPolls] = useState(() => new Set());
+  const [sharedPolls, setSharedPolls] = useState(() => new Set());
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showScrollHint, setShowScrollHint] = useState(() => !localStorage.getItem('hasScrolledFeed'));
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -1763,8 +1794,12 @@ const TikTokScrollView = ({
   const PTR_MAX = 140;
 
   const { user: currentUser } = useAuth();
-  const { isMetered } = useNetworkStatus();
+  const { isMetered, isSlowConnection, effectiveType, saveData } = useNetworkStatus();
   const isHighBandwidth = !isMetered;
+  // En conexión lenta: reducir prefetch threshold para no saturar el ancho de banda
+  const PREFETCH_THRESHOLD = isSlowConnection ? 8 : 15;
+  const VIDEO_PREFETCH_AHEAD = isSlowConnection ? 0 : 1;
+  const EAGER_PREFETCH_VIDEO = !isSlowConnection;
   const navigate = useNavigate();
   const { t } = useTranslation();
 
@@ -2079,14 +2114,13 @@ const TikTokScrollView = ({
     }
 
     // Carga silenciosa — sin spinner, igual que TikTok.
-    // 🚀 Prefetch threshold alineado con referencia "loadMore cuando faltan n":
-    // bajamos de 8 → 5 para reducir tráfico anticipado innecesario sin perder
-    // continuidad (con virtualización ajustada PREV/CUR/NEXT, 5 posts de
-    // colchón sobran para que la siguiente página llegue antes del próximo
-    // swipe del usuario).
+    // 🚀 Prefetch threshold ampliado a 15 para que la siguiente tanda llegue
+    // siempre antes de que el usuario pueda alcanzar el final, incluso en
+    // redes lentas (3G ~2s por fetch). Con virtualización PREV/CUR/NEXT,
+    // 15 posts de colchón = ~15 segundos de margen a 1 swipe/s.
     if (onLoadMore && hasMoreContent && !isLoadingMore) {
       const remaining = polls.length - newIndex;
-      if (remaining <= 5) onLoadMore();
+      if (remaining <= PREFETCH_THRESHOLD) onLoadMore();
     }
 
     // Duración: si hay velocidad, calcula tiempo real para recorrer lo que queda
@@ -2171,9 +2205,7 @@ const TikTokScrollView = ({
       ]).then(([cacheMod, mediaMod]) => {
         const cache = cacheMod.default;
         const { pickPlayableVideoUrl, pickVideoPosterUrl, pickImageUrl } = mediaMod;
-        const conn = navigator?.connection;
-        const isCellular = conn?.type === 'cellular' || ['2g', '3g'].includes(conn?.effectiveType || '');
-        const videoMaxBytes = isCellular ? 0 : 10 * 1024 * 1024;
+        const videoMaxBytes = EAGER_PREFETCH_VIDEO ? 10 * 1024 * 1024 : 0;
         const imageMaxBytes = 2 * 1024 * 1024;
         const p = polls[targetIndex];
         if (!p) return;
@@ -2220,7 +2252,7 @@ const TikTokScrollView = ({
         }
       }).catch(() => {});
     } catch (_) {}
-  }, [polls]);
+  }, [polls, EAGER_PREFETCH_VIDEO]);
 
   // Reset al cambiar de post activo → permite eager-prefetchar el nuevo +1
   useEffect(() => {
@@ -2846,15 +2878,18 @@ const TikTokScrollView = ({
     );
   }
 
-  // ─── SHARED CARD PROPS ────────────────────────────────────────────────────
-  const sharedCardProps = {
+  // ─── SHARED CARD PROPS (memoized to preserve React.memo on TikTokPollCard) ─
+  const sharedCardProps = useMemo(() => ({
     onVote, onLike, onShare, onComment, onSave, onCreatePoll,
     showLogo, onUpdatePoll, onDeletePoll, isOwnProfile,
     currentUser, savedPolls, setSavedPolls,
     commentedPolls, setCommentedPolls, sharedPolls, setSharedPolls,
     isHighBandwidth, onModalStateChange: setIsModalOpen,
     fromAudioDetailPage, currentAudio,
-  };
+  }), [onVote, onLike, onShare, onComment, onSave, onCreatePoll,
+      showLogo, onUpdatePoll, onDeletePoll, isOwnProfile,
+      currentUser, savedPolls, commentedPolls, sharedPolls,
+      isHighBandwidth, fromAudioDetailPage, currentAudio]);
 
   const slots = [
     { poll: slotPolls[SLOT_PREV], slotIndex: SLOT_PREV, pollIndex: activeIndex - 1 },
@@ -2865,8 +2900,8 @@ const TikTokScrollView = ({
   return (
     <div
       ref={containerRef}
-      className="fixed inset-0 z-50 bg-black overflow-hidden"
-      style={{ height: '100dvh', touchAction: 'none' }}
+      className="fixed inset-0 z-50 bg-black"
+      style={{ height: '100dvh', touchAction: 'none', overflow: 'hidden', contain: 'paint' }}
     >
       {/* Pull-to-refresh spinner */}
       {(pullDistance > 0 || isRefreshing) && (
@@ -2898,21 +2933,14 @@ const TikTokScrollView = ({
           position: 'absolute',
           top: 0, left: 0, right: 0,
           height: '300dvh',
-          // 🚀 translate3d → force compositor layer desde el primer paint.
-          // El browser crea una capa GPU permanente, así que las
-          // actualizaciones de transform durante el drag son compositor-only
-          // (no layout, no paint del contenido).
           transform: `translate3d(0, calc(-100dvh + ${translateOffset}dvh + ${pullDistance > 0 ? pullDistance : 0}px), 0)`,
-          // Duración adaptativa según velocidad del swipe
           transition: isTransitioning
             ? `transform ${transitionDuration}ms cubic-bezier(0.16, 1, 0.3, 1)`
             : 'none',
           willChange: 'transform',
-          // 🚀 touch-action: pan-y → declara al browser que solo procesamos
-          // pan vertical. El browser puede iniciar el gesto sin esperar a
-          // saber si vamos a hacer preventDefault. Crítico para 60fps.
-          // Sin esto, hay un retardo de ~50-100ms en mobile WebView.
           touchAction: 'pan-y',
+          transformStyle: 'preserve-3d',
+          contain: 'layout style',
         }}
         onTouchStart={handleTapePointerDown}
         onTouchMove={handleTapePointerMove}
@@ -2922,13 +2950,6 @@ const TikTokScrollView = ({
         onMouseUp={handleTapePointerUp}
       >
         {slots.map(({ poll: slotPoll, slotIndex, pollIndex }) => {
-          // 🚀 FLUIDEZ VS (Fase A-3): WIP — `content-visibility: auto` se
-          // probó aquí pero CAUSABA pantalla negra durante el swipe-in: el
-          // navegador difería paint+layout del subárbol VS y, al entrar al
-          // viewport, no le daba tiempo a pintar las cards antes de mostrar
-          // el frame → ventana negra con sólo el VS divider visible.
-          // Removido. El `contain: 'layout paint size'` ya aplicado abajo
-          // mantiene la isolation sin diferir paint.
           const isActiveSlot = pollIndex === activeIndex;
           return (
           <div
@@ -2942,17 +2963,11 @@ const TikTokScrollView = ({
               left: 0, right: 0,
               height: '100dvh',
               overflow: 'hidden',
-              // 🚀 CSS Containment — aisla layout + paint + size del slot.
-              // El browser sabe que cambios dentro del slot NO afectan a
-              // los hermanos → puede optimizar layout/paint dramáticamente.
-              // Esto reduce trabajo en repaint durante el drag.
-              contain: 'layout paint size',
-              // willChange solo en el slot activo y vecinos cercanos: cada
-              // capa GPU cuesta memoria. Promote permanentemente solo
-              // lo que se beneficia (los 3 slots SÍ, pero usamos transform3d
-              // arriba para forzar la capa sin willChange constante).
+              contain: 'strict',
+              contentVisibility: isActiveSlot ? 'visible' : 'auto',
               transform: 'translateZ(0)',
               backfaceVisibility: 'hidden',
+              willChange: isActiveSlot ? 'transform, opacity' : 'auto',
             }}
           >
             {slotPoll ? (
@@ -2995,10 +3010,21 @@ const TikTokScrollView = ({
           transform: translateZ(0);
           -webkit-backface-visibility: hidden;
           backface-visibility: hidden;
+          contain: strict;
         }
         * {
           -webkit-tap-highlight-color: transparent;
           -webkit-touch-callout: none;
+        }
+        .snaptok-swiper .swiper-slide {
+          contain: layout style paint;
+          content-visibility: auto;
+          transform: translateZ(0);
+          backface-visibility: hidden;
+        }
+        .snaptok-swiper .swiper-slide-active,
+        .snaptok-swiper .swiper-slide-visible {
+          content-visibility: visible;
         }
         @keyframes followBounce {
           0%   { transform: scale(0); }

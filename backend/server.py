@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 import os
@@ -175,42 +176,99 @@ try:
 except Exception as e:
     print(f"⚠️  Database optimizer initialization failed: {e}")
 
-# Create unique index on story_views to prevent duplicate views
-async def init_story_views_index():
+# ──────────────────────────────────────────────────────────────────────
+# 🗄️ COMPREHENSIVE INDEX INITIALIZATION
+# ──────────────────────────────────────────────────────────────────────
+async def init_all_indexes():
+    """Create all database indexes for optimal query performance"""
     try:
-        # First, clean up existing duplicates
-        pipeline = [
-            {"$group": {"_id": {"story_id": "$story_id", "user_id": "$user_id"}, "count": {"$sum": 1}, "ids": {"$push": "$_id"}}},
-            {"$match": {"count": {"$gt": 1}}}
-        ]
-        duplicates = await db.story_views.aggregate(pipeline).to_list(1000)
-        for dup in duplicates:
-            # Keep the first, delete the rest
-            ids_to_delete = dup["ids"][1:]
-            await db.story_views.delete_many({"_id": {"$in": ids_to_delete}})
-            # Fix the views_count for the story
-            actual_count = await db.story_views.count_documents({"story_id": dup["_id"]["story_id"]})
-            await db.stories.update_one(
-                {"id": dup["_id"]["story_id"]},
-                {"$set": {"views_count": actual_count}}
-            )
-        if duplicates:
-            print(f"🧹 Cleaned up {len(duplicates)} duplicate story views")
-        
-        # Then create the unique index
-        await db.story_views.create_index(
-            [("story_id", 1), ("user_id", 1)],
-            unique=True,
-            background=True
-        )
-        print("✅ Unique index on story_views (story_id, user_id) created")
+        # ── polls ──
+        await db.polls.create_index([("created_at", -1)], background=True)
+        await db.polls.create_index([("status", 1), ("created_at", -1)], background=True)
+        await db.polls.create_index([("author_id", 1), ("created_at", -1)], background=True)
+        await db.polls.create_index([("music_id", 1)], background=True, sparse=True)
+        await db.polls.create_index([("vs_id", 1)], background=True, sparse=True)
+        await db.polls.create_index([("is_active", 1), ("status", 1), ("created_at", -1)], background=True)
+        await db.polls.create_index([("is_active", 1), ("status", 1), ("total_votes", -1), ("created_at", -1)], background=True)
+        print("🗄️  polls indexes: OK")
+
+        # ── users ──
+        await db.users.create_index([("username", 1)], background=True, unique=True)
+        await db.users.create_index([("id", 1)], background=True, unique=True)
+        await db.users.create_index([("email", 1)], background=True, unique=True)
+        print("🗄️  users indexes: OK")
+
+        # ── votes ──
+        await db.votes.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
+        await db.votes.create_index([("user_id", 1)], background=True)
+        print("🗄️  votes indexes: OK")
+
+        # ── poll_likes ──
+        await db.poll_likes.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
+        await db.poll_likes.create_index([("user_id", 1)], background=True)
+        print("🗄️  poll_likes indexes: OK")
+
+        # ── saved_polls ──
+        await db.saved_polls.create_index([("poll_id", 1), ("user_id", 1)], background=True, unique=True)
+        await db.saved_polls.create_index([("user_id", 1)], background=True)
+        print("🗄️  saved_polls indexes: OK")
+
+        # ── follows ──
+        await db.follows.create_index([("follower_id", 1), ("following_id", 1)], background=True, unique=True)
+        await db.follows.create_index([("following_id", 1)], background=True)
+        print("🗄️  follows indexes: OK")
+
+        # ── comments ──
+        await db.comments.create_index([("poll_id", 1), ("user_id", 1)], background=True)
+        await db.comments.create_index([("user_id", 1)], background=True)
+        await db.comments.create_index([("poll_id", 1), ("created_at", -1)], background=True)
+        print("🗄️  comments indexes: OK")
+
+        # ── vs_experiences ──
+        await db.vs_experiences.create_index([("created_at", -1)], background=True)
+        await db.vs_experiences.create_index([("author_id", 1), ("created_at", -1)], background=True)
+        await db.vs_experiences.create_index([("is_active", 1), ("created_at", -1)], background=True)
+        print("🗄️  vs_experiences indexes: OK")
+
+        # ── challenges ──
+        await db.challenges.create_index([("status", 1), ("published_at", -1)], background=True)
+        await db.challenges.create_index([("creator_id", 1)], background=True)
+        print("🗄️  challenges indexes: OK")
+
+        # ── challenge_votes ──
+        await db.challenge_votes.create_index([("challenge_id", 1), ("voter_id", 1)], background=True)
+        print("🗄️  challenge_votes indexes: OK")
+
+        # ── story_views (unique) ──
+        try:
+            pipeline = [
+                {"$group": {"_id": {"story_id": "$story_id", "user_id": "$user_id"}, "count": {"$sum": 1}, "ids": {"$push": "$_id"}}},
+                {"$match": {"count": {"$gt": 1}}}
+            ]
+            duplicates = await db.story_views.aggregate(pipeline).to_list(1000)
+            for dup in duplicates:
+                ids_to_delete = dup["ids"][1:]
+                await db.story_views.delete_many({"_id": {"$in": ids_to_delete}})
+                actual_count = await db.story_views.count_documents({"story_id": dup["_id"]["story_id"]})
+                await db.stories.update_one(
+                    {"id": dup["_id"]["story_id"]},
+                    {"$set": {"views_count": actual_count}}
+                )
+            if duplicates:
+                print(f"🧹 Cleaned up {len(duplicates)} duplicate story views")
+            await db.story_views.create_index([("story_id", 1), ("user_id", 1)], unique=True, background=True)
+            print("🗄️  story_views indexes: OK")
+        except Exception as e:
+            print(f"⚠️  story_views index: {e}")
+
+        print("✅ All database indexes initialized")
     except Exception as e:
-        print(f"⚠️  Story views index creation: {e}")
+        print(f"⚠️  Index initialization failed: {e}")
 
 import asyncio
 try:
     loop = asyncio.get_event_loop()
-    loop.create_task(init_story_views_index())
+    loop.create_task(init_all_indexes())
 except RuntimeError:
     pass
 
@@ -226,6 +284,16 @@ itunes_cache = {}
 follow_status_cache = {}
 CACHE_EXPIRY_HOURS = 24  # Cache iTunes data for 24 hours
 FOLLOW_CACHE_EXPIRY_MINUTES = 10  # Cache follow status for 10 minutes
+
+# Shared HTTP client with connection pooling for external API calls
+_shared_http_client = None
+async def get_http_client():
+    global _shared_http_client
+    if _shared_http_client is None:
+        import httpx
+        limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        _shared_http_client = httpx.AsyncClient(limits=limits, timeout=10.0)
+    return _shared_http_client
 
 def is_cache_valid(cached_item):
     """Check if cached item is still valid"""
@@ -775,43 +843,39 @@ async def get_music_info(music_id: str):
             # Fetch track info directly from iTunes API using track ID
             url = f"https://itunes.apple.com/lookup?id={itunes_track_id}"
             
-            import httpx
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    results = data.get('results', [])
-                    if results:
-                        result = results[0]
-                        music_info = {
-                            'id': music_id,
-                            'title': result.get('trackName'),
-                            'artist': result.get('artistName'),
-                            'duration': 30,  # iTunes previews are 30 seconds
-                            'url': '',  # No local URL for iTunes tracks
-                            'preview_url': result.get('previewUrl'),
-                            'cover': result.get('artworkUrl100', '').replace('100x100bb.jpg', '400x400bb.jpg'),
-                            'category': result.get('primaryGenreName', 'Music'),
-                            'isOriginal': False,
-                            'isTrending': False,
-                            'uses': 0,  # Default for iTunes tracks
-                            'source': 'iTunes'
-                        }
-                        print(f"✅ Successfully fetched iTunes track: {music_info['title']} - {music_info['artist']}")
-                        
-                        # Cache the result
-                        itunes_cache[itunes_track_id] = {
-                            'data': music_info,
-                            'cached_at': datetime.utcnow()
-                        }
-                        
-                        return music_info
-                    else:
-                        print(f"❌ No results found for iTunes track ID: {itunes_track_id}")
-                        return None
+            client = await get_http_client()
+            response = await client.get(url, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
+                if results:
+                    result = results[0]
+                    music_info = {
+                        'id': music_id,
+                        'title': result.get('trackName'),
+                        'artist': result.get('artistName'),
+                        'duration': 30,
+                        'url': '',
+                        'preview_url': result.get('previewUrl'),
+                        'cover': result.get('artworkUrl100', '').replace('100x100bb.jpg', '400x400bb.jpg'),
+                        'category': result.get('primaryGenreName', 'Music'),
+                        'isOriginal': False,
+                        'isTrending': False,
+                        'uses': 0,
+                        'source': 'iTunes'
+                    }
+                    print(f"✅ Successfully fetched iTunes track: {music_info['title']} - {music_info['artist']}")
+                    itunes_cache[itunes_track_id] = {
+                        'data': music_info,
+                        'cached_at': datetime.utcnow()
+                    }
+                    return music_info
                 else:
-                    print(f"❌ iTunes API error: {response.status_code}")
+                    print(f"❌ No results found for iTunes track ID: {itunes_track_id}")
                     return None
+            else:
+                print(f"❌ iTunes API error: {response.status_code}")
+                return None
         except Exception as e:
             print(f"❌ Error fetching iTunes track {music_id}: {str(e)}")
             return None
@@ -1065,6 +1129,38 @@ async def get_music_info(music_id: str):
     
     return music_info
 
+# ──────────────────────────────────────────────────────────────────────
+# 🚀 PARALLEL HELPERS for batch operations
+# ──────────────────────────────────────────────────────────────────────
+
+async def batch_get_music_info(music_id_list: List[Optional[str]]) -> Dict[str, Any]:
+    """Fetch multiple music infos in parallel using asyncio.gather.
+    Returns a dict mapping poll_id → music_info dict (or None).
+    """
+    if not music_id_list:
+        return {}
+    tasks = [get_music_info(mid) for mid in music_id_list]
+    results = await asyncio.gather(*tasks)
+    # Build mapping: index in original list → music_info
+    music_map = {}
+    for i, mid in enumerate(music_id_list):
+        if mid and i < len(results) and results[i]:
+            music_map[mid] = results[i]
+    return music_map
+
+
+async def batch_resolve_thumbnails(thumbnail_jobs: List[tuple]) -> Dict[tuple, Optional[str]]:
+    """Resolve multiple video thumbnails in parallel.
+    Each job is (media_url, stored_thumbnail_url).
+    Returns dict of (media_url, stored_thumbnail_url) → resolved thumbnail URL.
+    """
+    if not thumbnail_jobs:
+        return {}
+    tasks = [resolve_video_thumbnail(media_url, stored_thumb) for media_url, stored_thumb in thumbnail_jobs]
+    results = await asyncio.gather(*tasks)
+    return {job: result for job, result in zip(thumbnail_jobs, results)}
+
+
 # =============  REAL MUSIC PREVIEW ENDPOINTS =============
 
 @api_router.get("/music/search")
@@ -1132,10 +1228,10 @@ async def search_music_realtime(
             'country': 'US'  # Can be changed to support different countries
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+        client = await get_http_client()
+        response = await client.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
         
         results = []
         if 'results' in data:
@@ -1210,43 +1306,43 @@ async def get_trending_music(
     seen_ids = set()
     
     try:
-        async with httpx.AsyncClient() as client:
-            for term in selected_terms:
-                try:
-                    url = "https://itunes.apple.com/search"
-                    params = {
-                        'term': term,
-                        'media': 'music',
-                        'entity': 'song',
-                        'limit': 10,
-                        'country': 'US'
-                    }
-                    response = await client.get(url, params=params, timeout=8)
-                    response.raise_for_status()
-                    data = response.json()
-                    
-                    if 'results' in data:
-                        for result in data['results']:
-                            track_id = result.get('trackId')
-                            preview_url = result.get('previewUrl')
-                            if preview_url and track_id and track_id not in seen_ids:
-                                seen_ids.add(track_id)
-                                all_results.append({
-                                    'id': f"itunes_{track_id}",
-                                    'title': result.get('trackName', 'Unknown'),
-                                    'artist': result.get('artistName', 'Unknown'),
-                                    'preview_url': preview_url,
-                                    'cover': result.get('artworkUrl100', '').replace('100x100', '400x400'),
-                                    'duration': 30,
-                                    'category': result.get('primaryGenreName', 'Music'),
-                                    'isOriginal': False,
-                                    'isTrending': True,
-                                    'uses': random.randint(100000, 9000000),
-                                    'source': 'iTunes'
-                                })
-                except Exception as e:
-                    print(f"Error fetching trending for '{term}': {e}")
-                    continue
+        client = await get_http_client()
+        for term in selected_terms:
+            try:
+                url = "https://itunes.apple.com/search"
+                params = {
+                    'term': term,
+                    'media': 'music',
+                    'entity': 'song',
+                    'limit': 10,
+                    'country': 'US'
+                }
+                response = await client.get(url, params=params, timeout=8)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'results' in data:
+                    for result in data['results']:
+                        track_id = result.get('trackId')
+                        preview_url = result.get('previewUrl')
+                        if preview_url and track_id and track_id not in seen_ids:
+                            seen_ids.add(track_id)
+                            all_results.append({
+                                'id': f"itunes_{track_id}",
+                                'title': result.get('trackName', 'Unknown'),
+                                'artist': result.get('artistName', 'Unknown'),
+                                'preview_url': preview_url,
+                                'cover': result.get('artworkUrl100', '').replace('100x100', '400x400'),
+                                'duration': 30,
+                                'category': result.get('primaryGenreName', 'Music'),
+                                'isOriginal': False,
+                                'isTrending': True,
+                                'uses': random.randint(100000, 9000000),
+                                'source': 'iTunes'
+                            })
+            except Exception as e:
+                print(f"Error fetching trending for '{term}': {e}")
+                continue
         
         # Shuffle and limit
         random.shuffle(all_results)
@@ -1614,13 +1710,13 @@ async def get_user_geolocation(request: Request):
             }
         
         # Use ip-api.com (free, no API key needed)
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"http://ip-api.com/json/{client_ip}?fields=status,country,countryCode",
-                timeout=5.0
-            )
-            
-            if response.status_code == 200:
+        client = await get_http_client()
+        response = await client.get(
+            f"http://ip-api.com/json/{client_ip}?fields=status,country,countryCode",
+            timeout=5.0
+        )
+        
+        if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
                     return {
@@ -1707,30 +1803,29 @@ async def generate_tts_audio(request: TTSRequest):
             }
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                headers=headers,
-                json=data,
-                timeout=30.0
+        client = await get_http_client()
+        response = await client.post(
+            url,
+            headers=headers,
+            json=data,
+            timeout=30.0
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"ElevenLabs API error: {response.text}"
             )
-            
-            if response.status_code != 200:
-                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"ElevenLabs API error: {response.text}"
-                )
-            
-            # Return audio as streaming response
-            return StreamingResponse(
-                BytesIO(response.content),
-                media_type="audio/mpeg",
-                headers={
-                    "Content-Disposition": "inline; filename=tts_audio.mp3",
-                    "Cache-Control": "no-cache"
-                }
-            )
+        
+        return StreamingResponse(
+            BytesIO(response.content),
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "inline; filename=tts_audio.mp3",
+                "Cache-Control": "no-cache"
+            }
+        )
         
     except HTTPException:
         raise
@@ -2419,86 +2514,66 @@ async def get_my_profile(current_user: UserResponse = Depends(get_current_user))
 async def ensure_user_profile(user_id: str):
     """Ensure user profile exists and is synchronized with user data"""
     try:
-        # Get user data from users collection
         user_data = await db.users.find_one({"id": user_id})
         if not user_data:
             return None
             
-        # Check if profile exists
         profile_data = await db.user_profiles.find_one({"id": user_id})
         
-        # Count followers and following
-        followers_count = await db.follows.count_documents({"following_id": user_id})
-        following_count = await db.follows.count_documents({"follower_id": user_id})
+        # Batch all count operations into a single aggregation where possible
+        followers_count, following_count, total_polls = await asyncio.gather(
+            db.follows.count_documents({"following_id": user_id}),
+            db.follows.count_documents({"follower_id": user_id}),
+            db.polls.count_documents({"author_id": user_id, "is_active": True}),
+        )
         
-        # Count total votes and polls
-        total_polls = await db.polls.count_documents({"author_id": user_id, "is_active": True})
-        
-        # Calculate actual vote statistics using aggregation for accuracy
-        # Use MongoDB aggregation to count real votes received on user's polls
-        pipeline = [
+        # Batched aggregation: total votes received (polls + challenges + VS)
+        poll_votes_pipeline = [
             {"$match": {"author_id": user_id, "is_active": True}},
             {"$unwind": "$options"},
-            {"$group": {
-                "_id": None,
-                "total_votes_received": {"$sum": "$options.votes"}
-            }}
+            {"$group": {"_id": None, "total": {"$sum": "$options.votes"}}}
         ]
-        
-        result = await db.polls.aggregate(pipeline).to_list(length=1)
-        total_votes_received = result[0]["total_votes_received"] if result else 0
-        
-        # 🏆 Also count votes received in challenges
         challenge_votes_pipeline = [
             {"$unwind": "$participants"},
             {"$match": {"participants.user_id": user_id}},
-            {"$group": {
-                "_id": None,
-                "challenge_votes": {"$sum": "$participants.votes_received"}
-            }}
+            {"$group": {"_id": None, "total": {"$sum": "$participants.votes_received"}}}
         ]
-        challenge_votes_result = await db.challenges.aggregate(challenge_votes_pipeline).to_list(length=1)
-        challenge_votes_received = challenge_votes_result[0]["challenge_votes"] if challenge_votes_result else 0
-        total_votes_received += challenge_votes_received
-
-        # 🆚 Also count votes received in VS experiences (votes are stored in
-        # vs_experiences.questions[].options[].votes; the corresponding poll doc
-        # is not incremented, so the polls aggregation above misses them).
         vs_votes_pipeline = [
             {"$match": {"author_id": user_id}},
             {"$unwind": "$questions"},
             {"$unwind": "$questions.options"},
-            {"$group": {
-                "_id": None,
-                "vs_votes": {"$sum": "$questions.options.votes"}
-            }}
+            {"$group": {"_id": None, "total": {"$sum": "$questions.options.votes"}}}
         ]
-        vs_votes_result = await db.vs_experiences.aggregate(vs_votes_pipeline).to_list(length=1)
-        vs_votes_received = vs_votes_result[0]["vs_votes"] if vs_votes_result else 0
-        total_votes_received += vs_votes_received
-
-        logger.info(f"📊 Calculated real votes for user {user_id}: {total_votes_received} (polls + {challenge_votes_received} challenge + {vs_votes_received} VS)")
-        
-        # Count votes made by this user
-        votes_made_by_user = await db.votes.count_documents({"user_id": user_id})
-        # 🏆 Also count challenge votes made by this user
-        challenge_votes_made = await db.challenge_votes.count_documents({"voter_id": user_id})
-        votes_made_by_user += challenge_votes_made
-        
-        # Count likes received on user's polls using aggregation
         likes_pipeline = [
             {"$match": {"author_id": user_id, "is_active": True}},
-            {"$group": {
-                "_id": None,
-                "total_likes": {"$sum": "$likes"}
-            }}
+            {"$group": {"_id": None, "total": {"$sum": "$likes"}}}
         ]
         
-        likes_result = await db.polls.aggregate(likes_pipeline).to_list(length=1)
-        likes_received = likes_result[0]["total_likes"] if likes_result else 0
+        poll_votes_res, challenge_votes_res, vs_votes_res, likes_res = await asyncio.gather(
+            db.polls.aggregate(poll_votes_pipeline).to_list(length=1),
+            db.challenges.aggregate(challenge_votes_pipeline).to_list(length=1),
+            db.vs_experiences.aggregate(vs_votes_pipeline).to_list(length=1),
+            db.polls.aggregate(likes_pipeline).to_list(length=1),
+        )
         
-        # Count likes given by this user
-        likes_given_by_user = await db.poll_likes.count_documents({"user_id": user_id})
+        total_votes_received = (poll_votes_res[0]["total"] if poll_votes_res else 0
+                                + challenge_votes_res[0]["total"] if challenge_votes_res else 0
+                                + vs_votes_res[0]["total"] if vs_votes_res else 0)
+        
+        # Band-aid: sum of list-of-dict totals doesn't chain well
+        _pv = poll_votes_res[0]["total"] if poll_votes_res else 0
+        _cv = challenge_votes_res[0]["total"] if challenge_votes_res else 0
+        _vv = vs_votes_res[0]["total"] if vs_votes_res else 0
+        total_votes_received = _pv + _cv + _vv
+        
+        likes_received = likes_res[0]["total"] if likes_res else 0
+        
+        votes_made_by_user, challenge_votes_made, likes_given_by_user = await asyncio.gather(
+            db.votes.count_documents({"user_id": user_id}),
+            db.challenge_votes.count_documents({"voter_id": user_id}),
+            db.poll_likes.count_documents({"user_id": user_id}),
+        )
+        votes_made_by_user += challenge_votes_made
         
         # Prepare profile data
         profile_update = {
@@ -2555,8 +2630,12 @@ async def get_user_profile_by_username(username: str):
         stripped_username = username.strip()
         user_data = await db.users.find_one({"username": stripped_username})
         if not user_data:
-            # Try finding users where the trimmed version of stored username matches
-            users_cursor = db.users.find({})
+            # Use regex search instead of full scan (index-friendly with anchored pattern)
+            import re
+            escaped = re.escape(stripped_username)
+            users_cursor = db.users.find(
+                {"username": {"$regex": f"^{escaped}$", "$options": "i"}}
+            ).limit(10)
             async for user in users_cursor:
                 if user.get("username", "").strip() == stripped_username:
                     user_data = user
@@ -2933,384 +3012,26 @@ async def search_users_optimized(query: str, current_user_id: str, limit: int):
         
         users = await db.users.aggregate(pipeline).to_list(limit)
         
+        # Batch resolve profiles and follow status
+        user_ids = [user["id"] for user in users]
+        profiles_map = {}
+        if user_ids:
+            p_cursor = db.user_profiles.find({"id": {"$in": user_ids}})
+            profiles_map = {p["id"]: p async for p in p_cursor}
+        
+        follows_map = {}
+        if user_ids and current_user_id:
+            fol_cursor = db.follows.find({
+                "follower_id": current_user_id,
+                "following_id": {"$in": user_ids}
+            })
+            follows_map = {f["following_id"]: True async for f in fol_cursor}
+        
         results = []
         for user in users:
-            # Calculate simple relevance score
-            username_score = 2 if query in user.get("username", "").lower() else 0
-            display_name_score = 1.5 if query in user.get("display_name", "").lower() else 0
-            relevance_score = username_score + display_name_score
-            
-            results.append({
-                "type": "user",
-                "id": user["id"],
-                "user_id": user["id"],  # Add user_id for follow functionality
-                "username": user.get("username", ""),
-                "display_name": user.get("display_name", ""),
-                "bio": user.get("bio", ""),
-                "avatar_url": user.get("avatar_url", ""),  # Changed 'avatar' to 'avatar_url' for consistency
-                "followers_count": user.get("followers_count", 0),
-                "relevance_score": relevance_score,
-                "popularity_score": user.get("followers_count", 0)
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in optimized user search: {str(e)}")
-        return []
-
-async def search_hashtags_optimized(query: str, current_user_id: str, limit: int):
-    """Optimized hashtag search - returns individual posts containing the hashtag"""
-    try:
-        # Search for hashtags in post tags, title, and content
-        hashtag_query = query if query.startswith("#") else f"#{query}"
-        query_without_hash = query.replace("#", "").strip()
-        
-        # Use aggregation pipeline similar to search_posts_optimized
-        pipeline = [
-            {
-                "$match": {
-                    "$or": [
-                        # Search in tags array (exact or partial match)
-                        {"tags": {"$regex": query_without_hash, "$options": "i"}},
-                        # Search in title for hashtags
-                        {"title": {"$regex": hashtag_query, "$options": "i"}},
-                        # Search in content field if exists
-                        {"content": {"$regex": hashtag_query, "$options": "i"}}
-                    ]
-                }
-            },
-            {
-                "$limit": limit * 2  # Get more to ensure we have enough after processing
-            },
-            {
-                "$lookup": {
-                    "from": "users",
-                    "localField": "author_id", 
-                    "foreignField": "id",
-                    "as": "author_info"
-                }
-            },
-            {
-                "$addFields": {
-                    "author": {"$arrayElemAt": ["$author_info", 0]}
-                }
-            },
-            {
-                "$project": {
-                    "id": 1,
-                    "title": 1,
-                    "content": 1,
-                    "options": 1,
-                    "layout": 1,
-                    "vs_orientation": 1,  # 🎯 VS: orientación del split (vertical=lado a lado, horizontal=arriba-abajo)
-                    "vs_questions": 1,    # 🎯 VS: preguntas multi-pregunta
-                    "images": 1,
-                    "image_url": 1,
-                    "thumbnail_url": 1,
-                    "video_url": 1,
-                    "author_id": 1,
-                    "created_at": 1,
-                    "votes_count": {"$ifNull": ["$votes_count", 0]},
-                    "comments_count": {"$ifNull": ["$comments_count", 0]},
-                    "saves_count": {"$ifNull": ["$saves_count", 0]},
-                    "author.id": 1,
-                    "author.username": 1,
-                    "author.display_name": 1,
-                    "author.avatar_url": 1,
-                    "hashtags": 1,
-                    "tags": 1
-                }
-            }
-        ]
-        
-        posts = await db.polls.aggregate(pipeline).to_list(limit * 2)
-        
-        results = []
-        for post in posts[:limit]:  # Limit results after processing
-            # Calculate relevance score based on hashtag match
-            relevance_score = 0
-            if query_without_hash.lower() in [tag.lower() for tag in post.get("tags", [])]:
-                relevance_score += 3  # Higher score for exact tag match
-            if hashtag_query.lower() in post.get("title", "").lower():
-                relevance_score += 2
-            if hashtag_query.lower() in post.get("content", "").lower():
-                relevance_score += 1
-            
-            # Get first image for thumbnail from poll options
-            image_url = None
-            media_url = None
-            thumbnail_url = None
-            
-            # Extract images from poll options
-            if post.get("options") and len(post["options"]) > 0:
-                for option in post["options"]:
-                    if option.get("media_url"):
-                        media_url = option["media_url"]
-                        if option.get("media_type") == "video":
-                            option_thumbnail = option.get("thumbnail_url")
-                            if not option_thumbnail:
-                                option_thumbnail = await get_thumbnail_for_media_url(media_url)
-                            if option_thumbnail:
-                                thumbnail_url = option_thumbnail
-                                image_url = option_thumbnail
-                            else:
-                                image_url = media_url
-                        else:
-                            image_url = media_url
-                        break
-                    elif option.get("thumbnail_url"):
-                        thumbnail_url = option["thumbnail_url"]
-                        if not image_url:
-                            image_url = thumbnail_url
-            
-            # Fallback to legacy fields
-            if not image_url:
-                if post.get("images") and len(post["images"]) > 0:
-                    image_url = post["images"][0].get("url")
-                elif post.get("image_url"):
-                    image_url = post["image_url"]
-                elif post.get("thumbnail_url"):
-                    image_url = post["thumbnail_url"]
-                
-            # Build images array for frontend compatibility
-            images_array = []
-            processed_options = []
-            if post.get("options"):
-                for option in post["options"]:
-                    option_copy = option.copy()
-                    
-                    if option.get("media_url"):
-                        images_array.append({"url": option["media_url"]})
-                        
-                        if option.get("media_type") == "video":
-                            if not option_copy.get("thumbnail_url"):
-                                video_thumbnail = await get_thumbnail_for_media_url(option["media_url"])
-                                if video_thumbnail:
-                                    option_copy["thumbnail_url"] = video_thumbnail
-                    
-                    processed_options.append(option_copy)
-            
-            results.append({
-                "type": "post",
-                "id": post["id"],
-                "title": post.get("title", ""),
-                "content": post.get("content", ""),
-                "image_url": image_url,
-                "thumbnail_url": thumbnail_url or image_url,
-                "media_url": media_url or image_url,
-                "images": images_array,
-                "layout": post.get("layout", "vertical"),
-                "vs_orientation": post.get("vs_orientation", "horizontal"),  # 🎯 VS: orientación para thumbnail
-                "vs_questions": post.get("vs_questions", []),                # 🎯 VS: preguntas multi-pregunta
-                "options": processed_options,
-                "video_url": post.get("video_url"),
-                "author_id": post.get("author_id"),
-                "author": {
-                    "id": post.get("author", {}).get("id", ""),
-                    "username": post.get("author", {}).get("username", ""),
-                    "display_name": post.get("author", {}).get("display_name", ""),
-                    "avatar_url": post.get("author", {}).get("avatar_url", "")
-                },
-                "created_at": post.get("created_at", ""),
-                "votes_count": post.get("votes_count", 0),
-                "comments_count": post.get("comments_count", 0),
-                "hashtags": post.get("hashtags", []),
-                "tags": post.get("tags", []),
-                "relevance_score": relevance_score,
-                "popularity_score": post.get("votes_count", 0) + post.get("comments_count", 0)
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error in optimized hashtag search: {str(e)}")
-        return []
-
-async def search_sounds_optimized(query: str, current_user_id: str, limit: int):
-    """Optimized sound search - searches both user_audio and music used in posts"""
-    try:
-        results = []
-        query_lower = query.lower()
-        
-        # 1. Search in user_audio collection (user uploaded audios)
-        pipeline = [
-            {
-                "$match": {
-                    "$or": [
-                        {"title": {"$regex": query, "$options": "i"}},
-                        {"artist": {"$regex": query, "$options": "i"}}
-                    ]
-                }
-            },
-            {
-                "$limit": limit
-            },
-            {
-                "$lookup": {
-                    "from": "users",
-                    "localField": "uploader_id",
-                    "foreignField": "id",
-                    "as": "user_info"
-                }
-            },
-            {
-                "$addFields": {
-                    "author": {"$arrayElemAt": ["$user_info", 0]}
-                }
-            }
-        ]
-        
-        sounds = await db.user_audio.aggregate(pipeline).to_list(limit)
-        
-        for sound in sounds:
-            # Calculate relevance score
-            title_score = 2 if query_lower in sound.get("title", "").lower() else 0
-            artist_score = 1.5 if query_lower in sound.get("artist", "").lower() else 0
-            relevance_score = title_score + artist_score
-            
-            # Count posts using this audio
-            posts_count = await db.polls.count_documents({
-                "$or": [
-                    {"music.id": sound["id"]},
-                    {"music_id": sound["id"]},
-                    {"user_audio_id": sound["id"]}
-                ]
-            })
-            
-            # Get cover image
-            cover_url = sound.get("cover_url") or sound.get("cover_image") or sound.get("waveform_url", "")
-            
-            results.append({
-                "type": "sound",
-                "id": sound["id"],
-                "title": sound.get("title", ""),
-                "artist": sound.get("artist", ""),
-                "duration": sound.get("duration", 0),
-                "cover_image": cover_url,
-                "thumbnail_url": cover_url,
-                "author": {
-                    "username": sound.get("author", {}).get("username", ""),
-                    "display_name": sound.get("author", {}).get("display_name", "")
-                },
-                "posts_count": posts_count,
-                "posts_using_count": posts_count,
-                "relevance_score": relevance_score,
-                "popularity_score": posts_count
-            })
-        
-        # 2. If user_audio results are less than limit, search in polls for system music
-        if len(results) < limit:
-            # Get unique music from polls - search by music_id field
-            polls_with_music = await db.polls.find({
-                "music_id": {"$exists": True, "$ne": None}
-            }).to_list(500)  # Get more to filter
-            
-            # Collect unique music IDs and their info
-            music_usage = {}
-            for poll in polls_with_music:
-                music_id = poll.get("music_id")
-                if music_id and music_id not in [r["id"] for r in results]:
-                    # Get music info for this ID
-                    music_info = await get_music_info(music_id)
-                    if music_info:
-                        title = music_info.get("title", "")
-                        artist = music_info.get("artist", "")
-                        
-                        # Check if matches search query
-                        if query_lower in title.lower() or query_lower in artist.lower():
-                            if music_id not in music_usage:
-                                music_usage[music_id] = {
-                                    "info": music_info,
-                                    "count": 0
-                                }
-                            music_usage[music_id]["count"] += 1
-            
-            # Convert music_usage to results
-            for music_id, data in music_usage.items():
-                music_info = data["info"]
-                posts_count = data["count"]
-                
-                title = music_info.get("title", "")
-                artist = music_info.get("artist", "")
-                
-                # Calculate relevance score
-                title_score = 2 if query_lower in title.lower() else 0
-                artist_score = 1.5 if query_lower in artist.lower() else 0
-                relevance_score = title_score + artist_score
-                
-                # Get cover/thumbnail
-                cover_url = music_info.get("cover") or music_info.get("cover_url", "")
-                
-                results.append({
-                    "type": "sound",
-                    "id": music_id,
-                    "title": title,
-                    "artist": artist,
-                    "duration": music_info.get("duration", 0),
-                    "cover_image": cover_url,
-                    "thumbnail_url": cover_url,
-                    "author": {
-                        "username": artist,
-                        "display_name": artist
-                    },
-                    "posts_count": posts_count,
-                    "posts_using_count": posts_count,
-                    "relevance_score": relevance_score,
-                    "popularity_score": posts_count
-                })
-                
-                # Stop if we reached the limit
-                if len(results) >= limit:
-                    break
-        
-        # Sort by relevance and popularity
-        results.sort(key=lambda x: (x["relevance_score"], x["popularity_score"]), reverse=True)
-        
-        return results[:limit]
-        
-    except Exception as e:
-        logger.error(f"Error in optimized sound search: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return []
-
-async def search_users_advanced(query: str, current_user_id: str, limit: int):
-    """Advanced user search with fuzzy matching"""
-    search_regex = {"$regex": query, "$options": "i"}
-    
-    # Find users matching query
-    users = await db.users.find({
-        "$and": [
-            {"id": {"$ne": current_user_id}},
-            {
-                "$or": [
-                    {"username": search_regex},
-                    {"display_name": search_regex},
-                    {"bio": search_regex}
-                ]
-            }
-        ]
-    }).limit(limit * config.SEARCH_CONFIG['FUZZY_SEARCH_MULTIPLIER']).to_list(limit * config.SEARCH_CONFIG['FUZZY_SEARCH_MULTIPLIER'])  # Get more for fuzzy filtering
-    
-    results = []
-    for user in users:
-        # Calculate relevance score with configurable multipliers
-        username_sim = calculate_similarity(query, user.get("username", "")) * config.SEARCH_CONFIG['MULTIPLIERS']['USERNAME_MATCH']
-        display_name_sim = calculate_similarity(query, user.get("display_name", "")) * config.SEARCH_CONFIG['MULTIPLIERS']['DISPLAY_NAME_MATCH']
-        bio_sim = calculate_similarity(query, user.get("bio", "")) * config.SEARCH_CONFIG['MULTIPLIERS']['BIO_MATCH']
-        
-        relevance_score = max(username_sim, display_name_sim, bio_sim)
-        
-        # Get user profile for additional data
-        profile = await db.user_profiles.find_one({"id": user["id"]})
-        followers_count = profile.get("followers_count", 0) if profile else 0
-        
-        # Check if current user follows this user
-        is_following = await db.follows.find_one({
-            "follower_id": current_user_id,
-            "following_id": user["id"]
-        }) is not None
+            profile = profiles_map.get(user["id"])
+            followers_count = profile.get("followers_count", 0) if profile else 0
+            is_following = user["id"] in follows_map
         
         results.append({
             "type": "user",
@@ -3326,10 +3047,14 @@ async def search_users_advanced(query: str, current_user_id: str, limit: int):
             "created_at": user.get("created_at", ""),
             "verified": user.get("verified", False)
         })
-    
-    # Filter by relevance threshold and return top results
-    results = [r for r in results if r["relevance_score"] > config.SEARCH_CONFIG['MIN_RELEVANCE_SCORE']]
-    return sorted(results, key=lambda x: x["relevance_score"], reverse=True)[:limit]
+        
+        # Filter by relevance threshold and return top results
+        results = [r for r in results if r["relevance_score"] > config.SEARCH_CONFIG['MIN_RELEVANCE_SCORE']]
+        return sorted(results, key=lambda x: x["relevance_score"], reverse=True)[:limit]
+        
+    except Exception as e:
+        logger.error(f"Error in optimized user search: {str(e)}")
+        return []
 
 async def search_posts_advanced(query: str, current_user_id: str, limit: int):
     """Advanced posts search"""
@@ -3566,8 +3291,13 @@ async def get_search_suggestions_helper(current_user_id: str = None):
         ]
         
         top_profiles = await db.user_profiles.aggregate(pipeline).to_list(5)
+        profile_user_ids = [p["user_id"] for p in top_profiles]
+        users_map = {}
+        if profile_user_ids:
+            u_cursor = db.users.find({"id": {"$in": profile_user_ids}})
+            users_map = {u["id"]: u async for u in u_cursor}
         for profile in top_profiles:
-            user = await db.users.find_one({"id": profile["user_id"]})
+            user = users_map.get(profile["user_id"])
             if user and user["id"] != current_user_id:
                 suggestions["suggested_users"].append({
                     "id": user["id"],
@@ -3603,10 +3333,27 @@ async def get_trending_content(current_user_id: str):
         
         trending_posts = await db.polls.aggregate(pipeline).to_list(10)
         
+        # Batch resolve authors and comment counts
+        trend_author_ids = list(set(p["user_id"] for p in trending_posts))
+        authors_map = {}
+        if trend_author_ids:
+            a_cursor = db.users.find({"id": {"$in": trend_author_ids}})
+            authors_map = {a["id"]: a async for a in a_cursor}
+        
+        trend_poll_ids = [p["id"] for p in trending_posts]
+        comments_counts = {}
+        if trend_poll_ids:
+            cc_pipeline = [
+                {"$match": {"poll_id": {"$in": trend_poll_ids}}},
+                {"$group": {"_id": "$poll_id", "count": {"$sum": 1}}}
+            ]
+            async for doc in db.comments.aggregate(cc_pipeline):
+                comments_counts[doc["_id"]] = doc["count"]
+        
         results = []
         for post in trending_posts:
-            author = await db.users.find_one({"id": post["user_id"]})
-            comments_count = await db.comments.count_documents({"poll_id": post["id"]})
+            author = authors_map.get(post["user_id"])
+            comments_count = comments_counts.get(post["id"], 0)
             
             results.append({
                 "type": "trending_post",
@@ -4013,13 +3760,21 @@ async def get_conversations(current_user: UserResponse = Depends(get_current_use
     }).sort("last_message_at", -1).to_list(50)
     
     result = []
+    # Batch resolve all participant IDs across all conversations
+    all_participant_ids = list(set(
+        p for conv in conversations for p in conv["participants"] if p != current_user.id
+    ))
+    users_map = {}
+    if all_participant_ids:
+        u_cursor = db.users.find({"id": {"$in": all_participant_ids}})
+        users_map = {u["id"]: u async for u in u_cursor}
+    
     for conv_data in conversations:
-        # Get participant info
         participant_ids = [p for p in conv_data["participants"] if p != current_user.id]
         participants = []
         
         for participant_id in participant_ids:
-            user_data = await db.users.find_one({"id": participant_id})
+            user_data = users_map.get(participant_id)
             if user_data:
                 participants.append(UserResponse(**user_data))
         
@@ -4043,10 +3798,15 @@ async def get_conversations(current_user: UserResponse = Depends(get_current_use
         "status": "pending"
     }).sort("created_at", -1).to_list(50)
     
-    # Convert chat requests to conversation-like format
+    # Convert chat requests to conversation-like format (batched)
+    req_receiver_ids = list(set(r["receiver_id"] for r in pending_requests))
+    req_users_map = {}
+    if req_receiver_ids:
+        rq_cursor = db.users.find({"id": {"$in": req_receiver_ids}})
+        req_users_map = {u["id"]: u async for u in rq_cursor}
+    
     for req in pending_requests:
-        # Get receiver user info
-        other_user_data = await db.users.find_one({"id": req["receiver_id"]})
+        other_user_data = req_users_map.get(req["receiver_id"])
         if not other_user_data:
             continue
         
@@ -4115,11 +3875,14 @@ async def get_conversation_messages(
     # Reverse to get chronological order (oldest first)
     messages.reverse()
     
-    # Enrich messages with sender information
+    # Enrich messages with sender information (batched)
     enriched_messages = []
+    sender_ids = list(set(msg["sender_id"] for msg in messages))
+    senders_cursor = db.users.find({"id": {"$in": sender_ids}})
+    senders_map = {s["id"]: s async for s in senders_cursor}
+    
     for msg in messages:
-        # Get sender user info
-        sender = await db.users.find_one({"id": msg["sender_id"]})
+        sender = senders_map.get(msg["sender_id"])
         
         # Remove MongoDB _id field if present (not JSON serializable)
         msg_dict = {k: v for k, v in msg.items() if k != "_id"}
@@ -4208,9 +3971,14 @@ async def get_message_requests(current_user: UserResponse = Depends(get_current_
         viewed_ids = {v["request_id"] for v in viewed_requests}
         
         result = []
+        sender_ids = list(set(r["sender_id"] for r in requests))
+        senders_map = {}
+        if sender_ids:
+            s_cursor = db.users.find({"id": {"$in": sender_ids}})
+            senders_map = {s["id"]: s async for s in s_cursor}
+        
         for req in requests:
-            # Get sender info
-            sender = await db.users.find_one({"id": req["sender_id"]})
+            sender = senders_map.get(req["sender_id"])
             if sender:
                 result.append({
                     "id": req["id"],
@@ -4368,9 +4136,14 @@ async def get_received_chat_requests(current_user: UserResponse = Depends(get_cu
     }).sort("created_at", -1).to_list(50)
     
     result = []
+    sender_ids = list(set(r["sender_id"] for r in requests))
+    senders_map = {}
+    if sender_ids:
+        s_cursor = db.users.find({"id": {"$in": sender_ids}})
+        senders_map = {s["id"]: s async for s in s_cursor}
+    
     for req in requests:
-        # Get sender info
-        sender = await db.users.find_one({"id": req["sender_id"]})
+        sender = senders_map.get(req["sender_id"])
         if sender:
             result.append(ChatRequestResponse(
                 id=req["id"],
@@ -4393,9 +4166,14 @@ async def get_sent_chat_requests(current_user: UserResponse = Depends(get_curren
     }).sort("created_at", -1).to_list(50)
     
     result = []
+    receiver_ids = list(set(r["receiver_id"] for r in requests))
+    receivers_map = {}
+    if receiver_ids:
+        r_cursor = db.users.find({"id": {"$in": receiver_ids}})
+        receivers_map = {u["id"]: u async for u in r_cursor}
+    
     for req in requests:
-        # Get receiver info
-        receiver = await db.users.find_one({"id": req["receiver_id"]})
+        receiver = receivers_map.get(req["receiver_id"])
         if receiver:
             result.append(ChatRequestResponse(
                 id=req["id"],
@@ -4548,10 +4326,15 @@ async def get_recent_followers(current_user: UserResponse = Depends(get_current_
         }).to_list(1000)
         viewed_ids = {v["follower_id"] for v in viewed_followers}
         
-        # Get follower details
+        # Get follower details (batched)
+        followers_map = {}
+        if follower_ids:
+            f_cursor = db.users.find({"id": {"$in": follower_ids}})
+            followers_map = {f["id"]: f async for f in f_cursor}
+        
         followers = []
         for follow in recent_follows:
-            follower = await db.users.find_one({"id": follow["follower_id"]})
+            follower = followers_map.get(follow["follower_id"])
             if follower:
                 followers.append({
                     "id": follower["id"],
@@ -4736,9 +4519,16 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         
         print(f"DEBUG Activity: Found {len(likes)} likes on user's polls")
         
+        # Batch resolve users for likes
+        like_user_ids = list(set(l["user_id"] for l in likes))
+        like_users_map = {}
+        if like_user_ids:
+            lu_cursor = db.users.find({"id": {"$in": like_user_ids}})
+            like_users_map = {u["id"]: u async for u in lu_cursor}
+        
         for like in likes:
-            user = await db.users.find_one({"id": like["user_id"]})
-            poll = await db.polls.find_one({"id": like["poll_id"]})
+            user = like_users_map.get(like["user_id"])
+            poll = user_polls_by_id.get(like["poll_id"])
             if user and poll:
                 activities.append({
                     "id": f"like-{like['id']}",
@@ -4770,6 +4560,13 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         
         print(f"DEBUG Activity: Found {len(comments)} comments on user's polls")
         
+        # Batch resolve users for comments
+        comment_user_ids = list(set(c["user_id"] for c in comments))
+        comment_users_map = {}
+        if comment_user_ids:
+            cu_cursor = db.users.find({"id": {"$in": comment_user_ids}})
+            comment_users_map = {u["id"]: u async for u in cu_cursor}
+        
         # Batch-fetch likes by current user (creator) on these comments to set
         # the initial heart state on the activity inbox.
         _comment_ids_list = [c["id"] for c in comments]
@@ -4783,7 +4580,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             _liked_by_creator = {row["comment_id"] for row in _creator_likes}
         
         for comment in comments:
-            user = await db.users.find_one({"id": comment["user_id"]})  # Using correct field name
+            user = comment_users_map.get(comment["user_id"])  # Using correct field name
             poll = user_polls_by_id.get(comment.get("poll_id"))
             if user:
                 activities.append({
@@ -4818,9 +4615,16 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         
         print(f"DEBUG Activity: Found {len(votes)} votes on user's polls")
         
+        # Batch resolve users for votes
+        vote_user_ids = list(set(v["user_id"] for v in votes))
+        vote_users_map = {}
+        if vote_user_ids:
+            vu_cursor = db.users.find({"id": {"$in": vote_user_ids}})
+            vote_users_map = {u["id"]: u async for u in vu_cursor}
+        
         for vote in votes:
-            user = await db.users.find_one({"id": vote["user_id"]})
-            poll = await db.polls.find_one({"id": vote["poll_id"]})
+            user = vote_users_map.get(vote["user_id"])
+            poll = user_polls_by_id.get(vote["poll_id"])
             option = None
             
             # Find the option that was voted for
@@ -4867,8 +4671,15 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
             # Map de polls VS por id para lookup rápido
             vs_polls_by_id = {p["id"]: p for p in user_polls if p.get("layout") == "vs"}
             
+            # Batch resolve voters
+            vs_voter_ids = list(set(v["user_id"] for v in vs_votes_recent))
+            vs_voters_map = {}
+            if vs_voter_ids:
+                vv_cursor = db.users.find({"id": {"$in": vs_voter_ids}})
+                vs_voters_map = {u["id"]: u async for u in vv_cursor}
+            
             for vs_vote in vs_votes_recent:
-                voter = await db.users.find_one({"id": vs_vote["user_id"]})
+                voter = vs_voters_map.get(vs_vote["user_id"])
                 poll = vs_polls_by_id.get(vs_vote["vs_id"])
                 option_text = ""
                 # Buscar el texto de la opción votada dentro de vs_questions
@@ -4919,8 +4730,17 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         
         print(f"DEBUG Activity: Found {len(polls_with_general_mentions)} polls with general mentions")
         
+        # Batch resolve author info for all mentioned polls
+        general_author_ids = list(set(p["author_id"] for p in polls_with_general_mentions))
+        option_author_ids = list(set(p["author_id"] for p in polls_with_option_mentions))
+        all_author_ids = list(set(general_author_ids + option_author_ids))
+        authors_map = {}
+        if all_author_ids:
+            a_cursor = db.users.find({"id": {"$in": all_author_ids}})
+            authors_map = {a["id"]: a async for a in a_cursor}
+        
         for poll in polls_with_general_mentions:
-            author = await db.users.find_one({"id": poll["author_id"]})
+            author = authors_map.get(poll["author_id"])
             if author:
                 activities.append({
                     "id": f"mention-general-{poll['id']}",
@@ -4952,7 +4772,7 @@ async def get_recent_activity(current_user: UserResponse = Depends(get_current_u
         print(f"DEBUG Activity: Found {len(polls_with_option_mentions)} polls with option mentions")
         
         for poll in polls_with_option_mentions:
-            author = await db.users.find_one({"id": poll["author_id"]})
+            author = authors_map.get(poll["author_id"])
             if author:
                 # Find which option mentioned the user
                 mentioned_option = None
@@ -5666,22 +5486,33 @@ async def get_comment(
     
     replies_data = await replies_cursor.to_list(100)
     
-    # Procesar respuestas
+    # Batch resolve reply users
+    reply_user_ids = list(set(r["user_id"] for r in replies_data))
+    reply_users_map = {}
+    if reply_user_ids:
+        ru_cursor = db.users.find({"id": {"$in": reply_user_ids}})
+        reply_users_map = {u["id"]: u async for u in ru_cursor}
+    
+    # Process replies (batched liked check)
     replies = []
+    reply_ids = [r["id"] for r in replies_data]
+    user_likes_map = {}
+    if reply_ids and hasattr(current_user, 'id'):
+        ul_cursor = db.comment_likes.find({
+            "comment_id": {"$in": reply_ids},
+            "user_id": current_user.id
+        })
+        user_likes_map = {ul["comment_id"]: True async for ul in ul_cursor}
+    
     for reply_data in replies_data:
-        reply_user_data = await db.users.find_one({"id": reply_data["user_id"]})
+        reply_user_data = reply_users_map.get(reply_data["user_id"])
         if reply_user_data:
-            reply_user_like = await db.comment_likes.find_one({
-                "comment_id": reply_data["id"],
-                "user_id": current_user.id
-            })
-            
             reply = CommentResponse(
                 **reply_data,
                 user=UserResponse(**reply_user_data),
-                replies=[],  # Por ahora solo 2 niveles
+                replies=[],
                 reply_count=0,
-                user_liked=bool(reply_user_like)
+                user_liked=reply_data["id"] in user_likes_map
             )
             replies.append(reply)
     
@@ -5751,13 +5582,31 @@ def get_upload_path(upload_type: UploadType, file_format: str, filename: str) ->
     return file_path, public_url
 
 async def get_image_dimensions(file_path: Path) -> tuple[Optional[int], Optional[int]]:
-    """Get image dimensions using PIL"""
+    """Get image dimensions using PIL (offloaded to thread)"""
     try:
-        with Image.open(file_path) as img:
-            return img.width, img.height
+        return await asyncio.to_thread(_get_image_dimensions_sync, file_path)
     except Exception as e:
         print(f"Error getting image dimensions: {e}")
         return None, None
+
+def _get_image_dimensions_sync(file_path: Path) -> tuple[Optional[int], Optional[int]]:
+    """Synchronous PIL image read (runs in thread pool)"""
+    from PIL import Image
+    with Image.open(file_path) as img:
+        return img.width, img.height
+
+def _generate_video_thumbnail_sync(file_path: str, thumb_path: str, thumb_filename: str) -> Optional[str]:
+    """Synchronous OpenCV thumbnail generation (runs in thread pool)"""
+    import cv2
+    try:
+        cap = cv2.VideoCapture(file_path)
+        ret, frame = cap.read()
+        if ret:
+            cv2.imwrite(thumb_path, frame)
+            return f"/api/uploads/stories/{thumb_filename}"
+        return None
+    finally:
+        cap.release()
 
 def _is_video_url(url: Optional[str]) -> bool:
     """Check if URL ends with a video extension"""
@@ -5810,7 +5659,7 @@ async def resolve_video_thumbnail(media_url: Optional[str], stored_thumbnail_url
                     "general": UploadType.GENERAL,
                 }
                 upload_type = upload_type_map.get(category, UploadType.GENERAL)
-                thumb_url = get_video_thumbnail_url(str(file_path), upload_type)
+                thumb_url = await get_video_thumbnail_url(str(file_path), upload_type)
                 if thumb_url and not _is_video_url(thumb_url):
                     # Best-effort: cache the generated thumbnail back into
                     # uploaded_files if a record exists, so next time we hit
@@ -5867,7 +5716,7 @@ async def get_thumbnail_for_media_url(media_url: str) -> Optional[str]:
                             upload_type = upload_type_map.get(category, UploadType.GENERAL)
                             
                             # Generate thumbnail
-                            thumbnail_url = get_video_thumbnail_url(file_path, upload_type)
+                            thumbnail_url = await get_video_thumbnail_url(file_path, upload_type)
                             
                             # Update database with thumbnail URL
                             if thumbnail_url:
@@ -5885,16 +5734,19 @@ async def get_thumbnail_for_media_url(media_url: str) -> Optional[str]:
         return None
 
 async def get_video_info(file_path: Path) -> tuple[Optional[int], Optional[int], Optional[float]]:
-    """Get video info and generate thumbnail"""
+    """Get video info and generate thumbnail (offloaded to thread for OpenCV)"""
+    return await asyncio.to_thread(_get_video_info_sync, file_path)
+
+def _get_video_info_sync(file_path: Path) -> tuple[Optional[int], Optional[int], Optional[float]]:
+    """Synchronous OpenCV video processing (runs in thread pool)"""
     try:
-        # Use OpenCV to get video information and generate thumbnail
+        import cv2
         cap = cv2.VideoCapture(str(file_path))
         
         if not cap.isOpened():
             print(f"Could not open video: {file_path}")
-            return 1280, 720, 30.0  # Return defaults if can't open
+            return 1280, 720, 30.0
         
-        # Get video properties
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -5902,21 +5754,17 @@ async def get_video_info(file_path: Path) -> tuple[Optional[int], Optional[int],
         
         duration = frame_count / fps if fps > 0 else 30.0
         
-        # Generate thumbnail from middle frame
         middle_frame = frame_count // 2 if frame_count > 0 else 0
         cap.set(cv2.CAP_PROP_POS_FRAMES, middle_frame)
         
         ret, frame = cap.read()
         if ret:
-            # Create thumbnail directory if it doesn't exist
             thumbnail_dir = file_path.parent / "thumbnails"
             thumbnail_dir.mkdir(exist_ok=True)
             
-            # Generate thumbnail filename
             thumbnail_filename = f"{file_path.stem}_thumbnail.jpg"
             thumbnail_path = thumbnail_dir / thumbnail_filename
             
-            # Resize frame to thumbnail size (maintain aspect ratio)
             max_size = 800
             if width > height:
                 new_width = max_size
@@ -5926,22 +5774,18 @@ async def get_video_info(file_path: Path) -> tuple[Optional[int], Optional[int],
                 new_width = int(width * (max_size / height))
             
             resized_frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
-            
-            # Save thumbnail
             cv2.imwrite(str(thumbnail_path), resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             print(f"Generated thumbnail: {thumbnail_path}")
-            
-        cap.release()
         
+        cap.release()
         return width, height, duration
         
     except Exception as e:
         print(f"Error getting video info: {e}")
-        # Return reasonable defaults on error
         return 1280, 720, 30.0
 
-def get_video_thumbnail_url(file_path: str, upload_type: UploadType = UploadType.GENERAL) -> Optional[str]:
-    """Generate thumbnail URL for video files - Creates thumbnail if it doesn't exist"""
+async def get_video_thumbnail_url(file_path: str, upload_type: UploadType = UploadType.GENERAL) -> Optional[str]:
+    """Generate thumbnail URL for video files - Creates thumbnail if it doesn't exist (async)"""
     try:
         file_path_obj = Path(file_path)
         thumbnail_filename = f"{file_path_obj.stem}_thumbnail.jpg"
@@ -5966,32 +5810,30 @@ def get_video_thumbnail_url(file_path: str, upload_type: UploadType = UploadType
         # Generate thumbnail if it doesn't exist
         if not thumbnail_path.exists():
             try:
-                import subprocess
-                # Use ffmpeg to extract frame at 1 second
-                # -ss 1: seek to 1 second
-                # -i: input file
-                # -vframes 1: extract 1 frame
-                # -vf scale=...: scale to max 720px width while maintaining aspect ratio
-                # -q:v 2: high quality JPEG
-                result = subprocess.run([
+                # Use asyncio subprocess to avoid blocking the event loop
+                proc = await asyncio.create_subprocess_exec(
                     'ffmpeg',
-                    '-ss', '1',  # Extract frame at 1 second
+                    '-ss', '1',
                     '-i', str(file_path_obj),
-                    '-vframes', '1',  # Extract only 1 frame
-                    '-vf', 'scale=720:-2',  # Scale to 720px width, maintain aspect ratio
-                    '-q:v', '2',  # High quality JPEG
-                    '-y',  # Overwrite if exists
-                    str(thumbnail_path)
-                ], capture_output=True, timeout=10)
-                
-                if result.returncode != 0:
-                    print(f"⚠️ FFmpeg error generating thumbnail: {result.stderr.decode()}")
+                    '-vframes', '1',
+                    '-vf', 'scale=720:-2',
+                    '-q:v', '2',
+                    '-y',
+                    str(thumbnail_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if proc.returncode != 0:
+                        print(f"⚠️ FFmpeg error generating thumbnail: {stderr.decode(errors='replace')}")
+                        return None
+                    else:
+                        print(f"✅ Thumbnail generated successfully: {thumbnail_path}")
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    print(f"⚠️ Timeout generating thumbnail for {file_path}")
                     return None
-                else:
-                    print(f"✅ Thumbnail generated successfully: {thumbnail_path}")
-            except subprocess.TimeoutExpired:
-                print(f"⚠️ Timeout generating thumbnail for {file_path}")
-                return None
             except Exception as e:
                 print(f"⚠️ Error generating thumbnail with ffmpeg: {e}")
                 return None
@@ -6235,7 +6077,7 @@ async def upload_file(
         elif file_type == FileType.VIDEO:
             width, height, duration = await get_video_info(file_path)
             # Generate thumbnail URL for videos
-            thumbnail_url = get_video_thumbnail_url(str(file_path), upload_type)
+            thumbnail_url = await get_video_thumbnail_url(str(file_path), upload_type)
         
         # Create database record
         uploaded_file = UploadedFile(
@@ -6349,18 +6191,18 @@ async def get_user_uploads(
 # =============  POLL ENDPOINTS =============
 
 def calculate_time_ago(created_at) -> str:
-    """Calculate time ago string from datetime or string"""
+    """Calculate time ago string from datetime or string. Fast when datetime."""
     from datetime import datetime
-    import dateutil.parser
     
     now = datetime.utcnow()
     
-    # Handle both datetime objects and ISO string formats
     if isinstance(created_at, str):
+        import dateutil.parser as _parser
         try:
-            created_at = dateutil.parser.parse(created_at).replace(tzinfo=None)
+            created_at = _parser.parse(created_at)
+            if created_at.tzinfo is not None:
+                created_at = created_at.replace(tzinfo=None)
         except Exception:
-            # Fallback if parsing fails
             return "hace un tiempo"
     elif created_at is None:
         return "fecha desconocida"
@@ -6370,14 +6212,13 @@ def calculate_time_ago(created_at) -> str:
     if diff.days > 0:
         if diff.days == 1:
             return "hace 1 día"
-        elif diff.days < 30:
+        if diff.days < 30:
             return f"hace {diff.days} días"
-        elif diff.days < 365:
+        if diff.days < 365:
             months = diff.days // 30
             return f"hace {months} {'mes' if months == 1 else 'meses'}"
-        else:
-            years = diff.days // 365
-            return f"hace {years} {'año' if years == 1 else 'años'}"
+        years = diff.days // 365
+        return f"hace {years} {'año' if years == 1 else 'años'}"
     
     hours = diff.seconds // 3600
     if hours > 0:
@@ -6452,34 +6293,57 @@ async def get_test_carousel():
         print(f"Error getting test carousel: {e}")
         return []
 
+# 🎯 Field projection for feed poll queries — only fetch what we need
+POLL_PROJECTION = {
+    "_id": 0,
+    "id": 1, "title": 1, "description": 1,
+    "author_id": 1,
+    "options": 1,
+    "total_votes": 1, "likes": 1, "shares": 1, "comments_count": 1, "saves_count": 1,
+    "music_id": 1, "music": 1,
+    "layout": 1,
+    "vs_id": 1, "vs_questions": 1, "vs_orientation": 1,
+    "creator_country": 1,
+    "composed_video_url": 1, "composed_status": 1, "composed_orientation": 1,
+    "is_active": 1, "status": 1,
+    "is_featured": 1,
+    "category": 1,
+    "tags": 1,
+    "mentioned_users": 1,
+    "challenge_pending": 1,
+    "created_at": 1,
+    "comments_enabled": 1, "show_vote_count": 1,
+}
+
 @api_router.get("/polls", response_model=List[PollResponse])
 async def get_polls(
     limit: int = 20,
     offset: int = 0,
     category: Optional[str] = None,
     featured: Optional[bool] = None,
+    vs_only: Optional[bool] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Get polls with pagination and filters"""
     
     # Build filter query
-    # 🔒 CRITICAL: Excluir polls de challenges no publicados
     filter_query = {
         "is_active": True,
-        "status": {"$nin": ["broken", "hidden", "failed", "processing"]},  # 🩺 ocultar publicaciones rotas
-        "$or": [
-            {"challenge_pending": {"$exists": False}},
-            {"challenge_pending": False},
-            {"challenge_pending": None}
-        ]
+        "status": {"$nin": ["broken", "hidden", "failed", "processing"]},
+        "challenge_pending": {"$ne": True}
     }
     if category:
         filter_query["category"] = category
     if featured is not None:
         filter_query["is_featured"] = featured
+    if vs_only:
+        filter_query["$and"] = [
+            {"vs_id": {"$exists": True}},
+            {"vs_id": {"$ne": None}}
+        ]
     
     # Get polls
-    polls_cursor = db.polls.find(filter_query).sort("created_at", -1).skip(offset).limit(limit)
+    polls_cursor = db.polls.find(filter_query, POLL_PROJECTION).sort("created_at", -1).skip(offset).limit(limit)
     polls = await polls_cursor.to_list(limit)
     
     if not polls:
@@ -6516,53 +6380,79 @@ async def get_polls(
     user_likes = await user_likes_cursor.to_list(len(poll_ids))
     liked_poll_ids = set(like["poll_id"] for like in user_likes)
     
+    # 🚀 BATCH: resolve all music infos in parallel
+    music_ids = [(poll_data["id"], poll_data.get("music_id")) for poll_data in polls if poll_data.get("music_id")]
+    music_id_list = [mid for _, mid in music_ids]
+    music_map = await batch_get_music_info(music_id_list)
+    
+    # 🚀 BATCH: resolve all video thumbnails in parallel
+    thumbnail_jobs = []
+    thumbnail_keys = []  # (poll_index, option_index)
+    for p_idx, poll_data in enumerate(polls):
+        for o_idx, option in enumerate(poll_data.get("options", [])):
+            if option.get("media_type") == "video" and option.get("media_url"):
+                thumbnail_jobs.append((option["media_url"], option.get("thumbnail_url")))
+                thumbnail_keys.append((p_idx, o_idx))
+    thumbnail_map = {}
+    if thumbnail_jobs:
+        results = await asyncio.gather(*[resolve_video_thumbnail(mu, tu) for mu, tu in thumbnail_jobs])
+        for (p_idx, o_idx), thumb in zip(thumbnail_keys, results):
+            thumbnail_map[(p_idx, o_idx)] = thumb
+    
+    # 🏷️ BATCH: resolve all option_users across all polls (one query, not N)
+    all_option_user_ids = set()
+    for poll_data in polls:
+        for uid in [o["user_id"] for o in poll_data.get("options", []) if "user_id" in o]:
+            all_option_user_ids.add(uid)
+    option_users_batch_dict = {}
+    if all_option_user_ids:
+        ou_cursor = db.users.find({"id": {"$in": list(all_option_user_ids)}})
+        for u in await ou_cursor.to_list(len(all_option_user_ids)):
+            option_users_batch_dict[u["id"]] = u
+
+    # 🏷️ BATCH: resolve ALL mentioned_users (poll-level + option-level) across all polls
+    all_mentioned_ids = set()
+    for poll_data in polls:
+        for mu in poll_data.get("mentioned_users", []):
+            if isinstance(mu, str):
+                all_mentioned_ids.add(mu)
+        for opt in poll_data.get("options", []):
+            for mu in opt.get("mentioned_users", []):
+                if isinstance(mu, str):
+                    all_mentioned_ids.add(mu)
+    mentioned_batch_dict = {}
+    if all_mentioned_ids:
+        mu_cursor = db.users.find({"id": {"$in": list(all_mentioned_ids)}})
+        for u in await mu_cursor.to_list(len(all_mentioned_ids)):
+            mentioned_batch_dict[u["id"]] = u
+
     # Build response
     result = []
-    for poll_data in polls:
-        # Get option users (solo si las opciones tienen user_id)
-        option_user_ids = [option["user_id"] for option in poll_data.get("options", []) if "user_id" in option]
-        if option_user_ids:
-            option_users_cursor = db.users.find({"id": {"$in": option_user_ids}})
-            option_users_list = await option_users_cursor.to_list(len(option_user_ids))
-            option_users_dict = {user["id"]: user for user in option_users_list}
-        else:
-            option_users_dict = {}
+    for poll_idx, poll_data in enumerate(polls):
+        # Use batch-resolved option users
+        option_user_ids = [o["user_id"] for o in poll_data.get("options", []) if "user_id" in o]
+        option_users_dict = {uid: option_users_batch_dict.get(uid) for uid in option_user_ids}
         
         # Process options
         options = []
-        for option in poll_data.get("options", []):
+        for opt_idx, option in enumerate(poll_data.get("options", [])):
             option_user = option_users_dict.get(option.get("user_id")) if option.get("user_id") else None
             
-            # Keep media_url as relative path for frontend to handle
             media_url = option.get("media_url")
+            thumbnail_url = thumbnail_map.get((poll_idx, opt_idx)) or option.get("thumbnail_url")
             
-            # Get thumbnail URL for videos (handles legacy bogus thumbnail_url == media_url)
-            if option.get("media_type") == "video" and media_url:
-                thumbnail_url = await resolve_video_thumbnail(media_url, option.get("thumbnail_url"))
-            else:
-                thumbnail_url = option.get("thumbnail_url")
-            
-            # Resolve mentioned users for this option
+            # Resolve mentioned users for this option (batch-resolved)
             option_mentioned_users_data = []
             if option.get("mentioned_users"):
-                option_mentioned_user_ids = option.get("mentioned_users", [])
-                if option_mentioned_user_ids:
-                    try:
-                        option_mentioned_cursor = db.users.find({"id": {"$in": option_mentioned_user_ids}})
-                        option_mentioned_list = await option_mentioned_cursor.to_list(len(option_mentioned_user_ids))
-                        
-                        option_mentioned_users_data = [
-                            {
-                                "id": user["id"],
-                                "username": user["username"],
-                                "display_name": user.get("display_name"),
-                                "avatar_url": user.get("avatar_url")
-                            } 
-                            for user in option_mentioned_list
-                        ]
-                    except Exception as e:
-                        print(f"DEBUG: Error resolving mentioned users for option {option.get('id')}: {e}")
-                        option_mentioned_users_data = []
+                for mu_id in option.get("mentioned_users", []):
+                    if isinstance(mu_id, str) and mu_id in mentioned_batch_dict:
+                        u = mentioned_batch_dict[mu_id]
+                        option_mentioned_users_data.append({
+                            "id": u["id"],
+                            "username": u["username"],
+                            "display_name": u.get("display_name"),
+                            "avatar_url": u.get("avatar_url")
+                        })
             
             option_dict = {
                 "id": option.get("id"),
@@ -6573,21 +6463,18 @@ async def get_polls(
                     "displayName": option_user["display_name"] if option_user else None,
                     "avatar": option_user.get("avatar_url") if option_user else None,
                     "verified": option_user.get("is_verified", False) if option_user else False,
-                    "followers": "1K"  # Placeholder
+                    "followers": "1K"
                 } if option_user else None,
                 "mentioned_users": option_mentioned_users_data,
                 "extracted_audio_id": option.get("extracted_audio_id"),
                 "media": {
                     "type": option.get("media_type"),
                     "url": media_url,
-                    "thumbnail": thumbnail_url,  # None si no hay miniatura real (no caer al video URL)
+                    "thumbnail": thumbnail_url,
                     "transform": option.get("media_transform"),
-                    # 🎬 Phase 2: optimized MP4 + HLS master playlist URLs.
                     "optimizedUrl": option.get("optimized_media_url"),
                     "hls": option.get("hls_url"),
                 } if media_url else None,
-                # 🎬 Phase 2 (legacy flat): el utilitario mediaUrl.js también
-                # lee estos campos si la estructura "media" no los trae.
                 "optimized_media_url": option.get("optimized_media_url"),
                 "hls_url": option.get("hls_url"),
             }
@@ -6597,35 +6484,21 @@ async def get_polls(
         if not options or not poll_data.get("title"):
             continue
         
-        # Get music info if available
-        music_info = await get_music_info(poll_data.get("music_id")) if poll_data.get("music_id") else None
+        # Use pre-fetched music info from batch
+        music_info = music_map.get(poll_data.get("music_id"))
         
-        # Resolve mentioned users to user objects
+        # Resolve mentioned users to user objects (batch-resolved)
         mentioned_users_data = []
         if poll_data.get("mentioned_users"):
-            mentioned_user_ids = poll_data.get("mentioned_users", [])
-            if mentioned_user_ids:
-                try:
-                    mentioned_users_cursor = db.users.find({"id": {"$in": mentioned_user_ids}})
-                    mentioned_users_list = await mentioned_users_cursor.to_list(len(mentioned_user_ids))
-                    
-                    # Log for debugging
-                    print(f"DEBUG: Found {len(mentioned_users_list)} users out of {len(mentioned_user_ids)} mentioned IDs for poll {poll_data['id']}")
-                    if len(mentioned_users_list) != len(mentioned_user_ids):
-                        print(f"DEBUG: Missing users for IDs: {set(mentioned_user_ids) - set(user['id'] for user in mentioned_users_list)}")
-                    
-                    mentioned_users_data = [
-                        MentionedUser(
-                            id=user["id"],
-                            username=user["username"],
-                            display_name=user.get("display_name"),
-                            avatar_url=user.get("avatar_url")
-                        ) 
-                        for user in mentioned_users_list
-                    ]
-                except Exception as e:
-                    print(f"DEBUG: Error resolving mentioned users for poll {poll_data['id']}: {e}")
-                    mentioned_users_data = []
+            for mu_id in poll_data.get("mentioned_users", []):
+                if isinstance(mu_id, str) and mu_id in mentioned_batch_dict:
+                    u = mentioned_batch_dict[mu_id]
+                    mentioned_users_data.append(MentionedUser(
+                        id=u["id"],
+                        username=u["username"],
+                        display_name=u.get("display_name"),
+                        avatar_url=u.get("avatar_url")
+                    ))
         
         poll_response = PollResponse(
             id=poll_data["id"],
@@ -6638,25 +6511,23 @@ async def get_polls(
             shares=len(poll_data["shares"]) if isinstance(poll_data["shares"], list) else poll_data["shares"],
             comments_count=poll_data["comments_count"],
             saves_count=poll_data.get("saves_count", 0),
-            music=music_info,  # Include music information
+            music=music_info,
             user_vote=user_votes_dict.get(poll_data["id"]),
             user_liked=poll_data["id"] in liked_poll_ids,
             is_featured=poll_data["is_featured"],
             tags=poll_data.get("tags", []),
             category=poll_data.get("category"),
-            mentioned_users=mentioned_users_data,  # Include resolved mentioned users
-            layout=poll_data.get("layout"),  # Include layout configuration
-            # VS Experience fields - for multi-question VS polls
+            mentioned_users=mentioned_users_data,
+            layout=poll_data.get("layout"),
             vs_id=poll_data.get("vs_id"),
             vs_questions=poll_data.get("vs_questions", []),
-            creator_country=poll_data.get("creator_country"),  # Country where VS was created
-            vs_orientation=poll_data.get("vs_orientation", "horizontal"),  # VS orientation: 'vertical' or 'horizontal'
+            creator_country=poll_data.get("creator_country"),
+            vs_orientation=poll_data.get("vs_orientation", "horizontal"),
             composed_video_url=poll_data.get("composed_video_url"),
             composed_status=poll_data.get("composed_status"),
             composed_orientation=poll_data.get("composed_orientation"),
             created_at=poll_data["created_at"],
             time_ago=calculate_time_ago(poll_data["created_at"]),
-            # Post settings
             comments_enabled=poll_data.get("comments_enabled", True),
             show_vote_count=poll_data.get("show_vote_count", True)
         )
@@ -6792,6 +6663,7 @@ async def get_ultra_fast_feed(
     limit: int = 10,
     offset: int = 0,
     algorithm: str = "for_you",
+    vs_only: Optional[bool] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """
@@ -6800,41 +6672,35 @@ async def get_ultra_fast_feed(
     - Built for performance without complexity
     """
     try:
-        # 🚀 SIMPLIFIED FAST QUERY - Just use the working endpoint logic
-        # 🔒 CRITICAL: Excluir polls que pertenecen a challenges no publicados
         filter_query = {
             "is_active": True,
-            "status": {"$nin": ["broken", "hidden", "failed", "processing"]},  # 🩺 ocultar publicaciones rotas
-            "$or": [
-                {"challenge_pending": {"$exists": False}},  # No tiene el campo
-                {"challenge_pending": False},               # Campo existe pero es false
-                {"challenge_pending": None}                 # Campo es null
-            ]
+            "status": {"$nin": ["broken", "hidden", "failed", "processing"]},
+            "challenge_pending": {"$ne": True}
         }
+        if vs_only:
+            filter_query["$and"] = [
+                {"vs_id": {"$exists": True}},
+                {"vs_id": {"$ne": None}}
+            ]
         
-        # Get polls with simple sort (fast and reliable)
         if algorithm == "trending":
             sort_criteria = [("likes_count", -1), ("created_at", -1)]
         elif algorithm == "recent": 
             sort_criteria = [("created_at", -1)]
-        else:  # for_you default
+        else:
             sort_criteria = [("total_votes", -1), ("created_at", -1)]
         
-        # Execute fast query
-        polls_cursor = db.polls.find(filter_query).sort(sort_criteria).skip(offset).limit(limit)
+        polls_cursor = db.polls.find(filter_query, POLL_PROJECTION).sort(sort_criteria).skip(offset).limit(limit)
         polls = await polls_cursor.to_list(limit)
         
-        # Get author info in batch (fast)
         author_ids = list(set(poll.get("author_id") for poll in polls if poll.get("author_id")))
         authors_cursor = db.users.find({"id": {"$in": author_ids}})
         authors_list = await authors_cursor.to_list(len(author_ids))
-        # Remove _id from authors to avoid ObjectId serialization issues
         authors_dict = {}
         for user in authors_list:
             user_copy = {k: v for k, v in user.items() if k != "_id"}
             authors_dict[user["id"]] = user_copy
         
-        # 📊 Batch lookup: user votes and likes for percentage bars
         poll_ids = [poll.get("id") for poll in polls if poll.get("id")]
         
         user_votes_cursor = db.votes.find({
@@ -6851,7 +6717,6 @@ async def get_ultra_fast_feed(
         user_likes = await user_likes_cursor.to_list(len(poll_ids))
         liked_poll_ids = set(like["poll_id"] for like in user_likes)
         
-        # 🔖 Batch lookup: saved polls
         user_saves_cursor = db.saved_polls.find({
             "poll_id": {"$in": poll_ids},
             "user_id": current_user.id
@@ -6859,7 +6724,6 @@ async def get_ultra_fast_feed(
         user_saves = await user_saves_cursor.to_list(len(poll_ids))
         saved_poll_ids = set(save["poll_id"] for save in user_saves)
         
-        # 💬 Batch lookup: user commented polls
         user_comments_pipeline = [
             {"$match": {"poll_id": {"$in": poll_ids}, "user_id": current_user.id}},
             {"$group": {"_id": "$poll_id"}}
@@ -6867,7 +6731,6 @@ async def get_ultra_fast_feed(
         user_comments_agg = await db.comments.aggregate(user_comments_pipeline).to_list(len(poll_ids))
         commented_poll_ids = set(doc["_id"] for doc in user_comments_agg)
         
-        # 🏷️ Batch lookup: Resolve all mentioned user IDs across all options
         all_mentioned_ids = set()
         for poll_data in polls:
             for opt in poll_data.get("options", []):
@@ -6886,25 +6749,36 @@ async def get_ultra_fast_feed(
                     "display_name": u.get("display_name"),
                     "avatar_url": u.get("avatar_url")
                 }
-
+        
+        # 🚀 BATCH: resolve all music infos in parallel
+        music_ids = [poll_data.get("music_id") for poll_data in polls if poll_data.get("music_id")]
+        music_map = await batch_get_music_info(music_ids)
+        
+        # 🚀 BATCH: resolve all video thumbnails in parallel
+        thumbnail_jobs = []
+        thumbnail_keys = []
+        for p_idx, poll_data in enumerate(polls):
+            for o_idx, opt in enumerate(poll_data.get("options", [])):
+                if opt.get("media_type") == "video" and opt.get("media_url"):
+                    thumbnail_jobs.append((opt["media_url"], opt.get("thumbnail_url")))
+                    thumbnail_keys.append((p_idx, o_idx))
+        thumbnail_map = {}
+        if thumbnail_jobs:
+            results = await asyncio.gather(*[resolve_video_thumbnail(mu, tu) for mu, tu in thumbnail_jobs])
+            for (p_idx, o_idx), thumb in zip(thumbnail_keys, results):
+                thumbnail_map[(p_idx, o_idx)] = thumb
+        
         # Build response quickly
         result = []
-        for poll_data in polls:
+        for poll_idx, poll_data in enumerate(polls):
             author = authors_dict.get(poll_data.get("author_id"))
             if author:
-                # 🎨 CRITICAL FIX: Transform options to frontend format with media object
                 transformed_options = []
-                for opt in poll_data.get("options", []):
-                    # Get media fields from database
+                for opt_idx, opt in enumerate(poll_data.get("options", [])):
                     media_url = opt.get("media_url")
                     media_type = opt.get("media_type")
-                    # Resolve thumbnail (handles legacy bogus thumbnail_url == media_url for videos)
-                    if media_type == "video" and media_url:
-                        thumbnail_url = await resolve_video_thumbnail(media_url, opt.get("thumbnail_url"))
-                    else:
-                        thumbnail_url = opt.get("thumbnail_url")
+                    thumbnail_url = thumbnail_map.get((poll_idx, opt_idx)) or opt.get("thumbnail_url")
                     
-                    # Resolve mentioned users from IDs to full objects
                     raw_mentions = opt.get("mentioned_users", [])
                     resolved_mentions = []
                     for mu in raw_mentions:
@@ -6915,18 +6789,16 @@ async def get_ultra_fast_feed(
                         elif isinstance(mu, dict):
                             resolved_mentions.append(mu)
                     
-                    # Build option with proper media structure
                     option_dict = {
                         "id": opt.get("id"),
                         "text": opt.get("text", ""),
                         "votes": opt.get("votes", 0),
                         "extracted_audio_id": opt.get("extracted_audio_id"),
                         "mentioned_users": resolved_mentions,
-                        # 🎨 CRITICAL: Transform media to frontend format
                         "media": {
                             "type": media_type,
                             "url": media_url,
-                            "thumbnail": thumbnail_url,  # None si no hay miniatura real (no caer al video URL)
+                            "thumbnail": thumbnail_url,
                             "transform": opt.get("media_transform"),
                             "optimizedUrl": opt.get("optimized_media_url"),
                             "hls": opt.get("hls_url"),
@@ -6936,39 +6808,30 @@ async def get_ultra_fast_feed(
                     }
                     transformed_options.append(option_dict)
                 
-                # 🎵 CRITICAL FIX: Get music info if music_id exists
-                music_info = None
-                if poll_data.get("music_id"):
-                    music_info = await get_music_info(poll_data.get("music_id"))
+                music_info = music_map.get(poll_data.get("music_id"))
                 if not music_info and poll_data.get("music"):
-                    # Fallback: If music data already embedded, use it
                     music_info = poll_data.get("music")
                 
                 poll_response = {
                     "id": poll_data.get("id"),
                     "title": poll_data.get("title"),
                     "author": author,
-                    "authorUser": author,  # For compatibility
-                    "options": transformed_options,  # 🎨 FIXED: Use transformed options
+                    "options": transformed_options,
                     "created_at": poll_data.get("created_at"),
-                    "total_votes": poll_data.get("total_votes", 0),
-                    "totalVotes": poll_data.get("total_votes", 0),  # camelCase alias for frontend
+                    "totalVotes": poll_data.get("total_votes", 0),
                     "likes": poll_data.get("likes", 0),
-                    "likes_count": poll_data.get("likes", 0),  # alias for compatibility
                     "shares": poll_data.get("shares", 0),
                     "saves_count": poll_data.get("saves_count", 0),
                     "comments_count": poll_data.get("comments_count", 0),
                     "layout": poll_data.get("layout"),
                     "mentioned_users": poll_data.get("mentioned_users", []),
-                    "music": music_info,  # 🎵 FIXED: Use resolved music info
+                    "music": music_info,
                     "userVote": user_votes_dict.get(poll_data.get("id")),
                     "userLiked": poll_data.get("id") in liked_poll_ids,
                     "isSaved": poll_data.get("id") in saved_poll_ids,
                     "userCommented": poll_data.get("id") in commented_poll_ids,
-                    # Post settings - Include from database
                     "comments_enabled": poll_data.get("comments_enabled", True),
                     "show_vote_count": poll_data.get("show_vote_count", True),
-                    # VS fields
                     "vs_id": poll_data.get("vs_id"),
                     "vs_questions": poll_data.get("vs_questions", []),
                     "creator_country": poll_data.get("creator_country"),
@@ -6976,57 +6839,95 @@ async def get_ultra_fast_feed(
                 }
                 result.append(poll_response)
         
-        # 🏆 AGREGAR CHALLENGES PUBLICADOS AL FEED
-        # Los challenges publicados aparecen como una sola entrada unificada
+        # 🏆 CHALLENGES
         published_challenges_cursor = db.challenges.find({
             "status": ChallengeStatus.PUBLISHED
         }).sort("published_at", -1).limit(10)
         
         published_challenges = await published_challenges_cursor.to_list(length=10)
         
+        # 🚀 BATCH: resolve challenge music in parallel
+        challenge_music_jobs = []
         for challenge in published_challenges:
-            # Obtener los polls de este challenge
             participant_poll_ids = [
                 p.get("poll_id") for p in challenge.get("participants", [])
                 if p.get("poll_id") and p.get("status") == ParticipantStatus.CONTENT_SUBMITTED
             ]
-            
-            if not participant_poll_ids:
+            if participant_poll_ids:
+                challenge_polls = await db.polls.find({"id": {"$in": participant_poll_ids}}).to_list(length=10)
+                for poll in challenge_polls:
+                    if poll.get("music_id"):
+                        challenge_music_jobs.append((challenge.get("id"), poll.get("music_id")))
+                    if poll.get("music"):
+                        break
+        
+        challenge_music_tasks = [get_music_info(mid) for _, mid in challenge_music_jobs]
+        challenge_music_results = await asyncio.gather(*challenge_music_tasks) if challenge_music_tasks else []
+        challenge_music_map = {}
+        for (ch_id, _), result in zip(challenge_music_jobs, challenge_music_results):
+            if result and ch_id not in challenge_music_map:
+                challenge_music_map[ch_id] = result
+        
+        # 🚀 BATCH: collect all participant poll IDs and challenge vote lookups
+        challenge_poll_ids = []
+        challenge_creator_ids = []
+        challenge_vote_lookups = []
+        challenge_data_map = {}  # challenge_id -> {poll_ids, creator_id}
+        for challenge in published_challenges:
+            pids = [
+                p.get("poll_id") for p in challenge.get("participants", [])
+                if p.get("poll_id") and p.get("status") == ParticipantStatus.CONTENT_SUBMITTED
+            ]
+            if not pids:
                 continue
-            
-            challenge_polls = await db.polls.find({"id": {"$in": participant_poll_ids}}).to_list(length=10)
-            
+            cid = challenge.get("id")
+            creator_id = challenge.get("creator_id")
+            challenge_poll_ids.extend(pids)
+            challenge_creator_ids.append(creator_id)
+            challenge_vote_lookups.append({"challenge_id": cid, "voter_id": current_user.id} if current_user else None)
+            challenge_data_map[cid] = {"poll_ids": pids, "creator_id": creator_id}
+        
+        # Batch fetch all challenge polls
+        all_challenge_polls = {}
+        if challenge_poll_ids:
+            for p in await (db.polls.find({"id": {"$in": challenge_poll_ids}}, POLL_PROJECTION).to_list(len(challenge_poll_ids))):
+                all_challenge_polls[p["id"]] = p
+        
+        # Batch fetch all challenge votes for current user
+        user_challenge_votes = {}
+        if current_user and challenge_vote_lookups:
+            for v in await (db.challenge_votes.find({"voter_id": current_user.id, "challenge_id": {"$in": [l["challenge_id"] for l in challenge_vote_lookups if l]}}).to_list(len(challenge_vote_lookups))):
+                user_challenge_votes[v["challenge_id"]] = v.get("participant_id")
+        
+        # Batch fetch missing creators
+        missing_creator_ids = [cid for cid in set(challenge_creator_ids) if cid not in authors_dict]
+        if missing_creator_ids:
+            for u in await (db.users.find({"id": {"$in": missing_creator_ids}}).to_list(len(missing_creator_ids))):
+                authors_dict[u["id"]] = {k: v for k, v in u.items() if k != "_id"}
+        
+        for challenge in published_challenges:
+            cid = challenge.get("id")
+            if cid not in challenge_data_map:
+                continue
+            info = challenge_data_map[cid]
+            challenge_polls = [all_challenge_polls.get(pid) for pid in info["poll_ids"] if pid in all_challenge_polls]
             if not challenge_polls:
                 continue
             
-            # Obtener voto del usuario actual en este challenge
-            user_challenge_vote = None
-            if current_user:
-                existing_vote = await db.challenge_votes.find_one({
-                    "challenge_id": challenge.get("id"),
-                    "voter_id": current_user.id
-                })
-                if existing_vote:
-                    user_challenge_vote = existing_vote.get("participant_id")
+            user_challenge_vote = user_challenge_votes.get(cid)
             
-            # Construir las opciones del challenge (cada poll es una opción)
             challenge_options = []
             for idx, poll in enumerate(challenge_polls):
-                # Obtener la primera opción del poll (el contenido)
                 poll_options = poll.get("options", [])
                 if poll_options:
                     first_option = poll_options[0]
-                    # Buscar info del participante
                     participant_info = next(
                         (p for p in challenge.get("participants", []) if p.get("poll_id") == poll.get("id")),
                         None
                     )
                     
-                    # Votos vienen de votes_received del participante en el challenge
                     participant_votes = participant_info.get("votes_received", 0) if participant_info else 0
                     participant_user_id = participant_info.get("user_id") if participant_info else None
-                    
-                    # Usar el texto original del poll del participante, NO el username
                     original_text = first_option.get("text", "") if first_option else ""
                     
                     challenge_options.append({
@@ -7047,19 +6948,12 @@ async def get_ultra_fast_feed(
                         "hls_url": first_option.get("hls_url"),
                     })
             
-            # Obtener info del creador
             creator = authors_dict.get(challenge.get("creator_id"))
-            if not creator:
-                creator_doc = await db.users.find_one({"id": challenge.get("creator_id")})
-                if creator_doc:
-                    creator = {k: v for k, v in creator_doc.items() if k != "_id"}
             
-            # Determinar layout: usar required_layout del challenge o auto-calcular
             stored_layout = challenge.get("required_layout")
             if stored_layout:
                 challenge_layout = stored_layout
             else:
-                # Fallback: auto-calcular según número de participantes
                 num_participants = len(challenge_options)
                 if num_participants == 2:
                     challenge_layout = "vs-horizontal"
@@ -7070,15 +6964,11 @@ async def get_ultra_fast_feed(
                 else:
                     challenge_layout = "vs-grid"
             
-            # 🎵 Resolve music from challenge polls
-            challenge_music_info = None
-            for poll in challenge_polls:
-                if poll.get("music"):
-                    challenge_music_info = poll.get("music")
-                    break
-                elif poll.get("music_id"):
-                    challenge_music_info = await get_music_info(poll.get("music_id"))
-                    if challenge_music_info:
+            challenge_music_info = challenge_music_map.get(challenge.get("id"))
+            if not challenge_music_info:
+                for poll in challenge_polls:
+                    if poll.get("music"):
+                        challenge_music_info = poll.get("music")
                         break
             
             challenge_response = {
@@ -7086,14 +6976,10 @@ async def get_ultra_fast_feed(
                 "challenge_id": challenge.get("id"),
                 "title": challenge.get("title"),
                 "author": creator,
-                "authorUser": creator,
                 "options": challenge_options,
                 "created_at": challenge.get("published_at") or challenge.get("created_at"),
-                "total_votes": sum(opt.get("votes", 0) for opt in challenge_options),
                 "totalVotes": sum(opt.get("votes", 0) for opt in challenge_options),
                 "likes": challenge.get("likes_count", 0),
-                "likes_count": challenge.get("likes_count", 0),
-                "comments": challenge.get("comments_count", 0),
                 "comments_count": challenge.get("comments_count", 0),
                 "shares": 0,
                 "saves_count": challenge.get("saves_count", 0),
@@ -7175,195 +7061,34 @@ async def get_ultra_fast_feed(
         print(f"❌ Ultra-fast feed error: {str(e)}")
         raise HTTPException(status_code=500, detail="Ultra-fast feed temporarily unavailable")
 
-@api_router.get("/polls/performance-stats")
-async def get_performance_stats(
+@api_router.get("/polls/cursor")
+async def get_polls_cursor(
+    limit: int = 10,
+    cursor: Optional[str] = None,
+    vs_only: Optional[bool] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """
-    📊 PERFORMANCE STATISTICS: Real-time performance metrics
+    🚀 CURSOR-BASED PAGINATION (O(1) deep scroll)
+    Replaces offset-based skip() which degrades on deep pages.
+    Pass the `_id` of the last poll as cursor to get the next page.
     """
-    try:
-        from database_optimizer import db_optimizer
-        from optimized_feed import feed_optimizer
-        
-        stats = {
-            "database_optimizer": {
-                "initialized": db_optimizer is not None,
-                "cache_stats": db_optimizer.get_cache_stats() if db_optimizer else None
-            },
-            "feed_optimizer": {
-                "initialized": feed_optimizer is not None, 
-                "cache_stats": feed_optimizer.getCacheStats() if feed_optimizer else None
-            },
-            "performance_endpoints": {
-                "ultra_fast_feed": "/api/polls/ultra-fast",
-                "fast_feed": "/api/polls/fast", 
-                "fast_upload": "/api/fast/upload/video",
-                "batch_upload": "/api/fast/upload/batch"
-            },
-            "optimizations_active": {
-                "database_indexes": True,
-                "query_aggregation": True,
-                "caching": True,
-                "batch_processing": True,
-                "lazy_loading": True,
-                "video_optimization": True
-            }
-        }
-        
-        return stats
-        
-    except Exception as e:
-        print(f"❌ Performance stats error: {str(e)}")
-        return {"error": "Performance stats temporarily unavailable"}
-
-@api_router.get("/system/health")
-async def system_health_check():
-    """
-    🏥 SYSTEM HEALTH CHECK: Quick system status for performance testing
-    """
-    try:
-        import time
-        start_time = time.time()
-        
-        # Quick DB health check
-        db_healthy = False
-        try:
-            await db.polls.count_documents({"is_active": True}, limit=1)
-            db_healthy = True
-        except:
-            pass
-        
-        # Performance measurements
-        response_time = (time.time() - start_time) * 1000
-        
-        return {
-            "status": "healthy" if db_healthy else "degraded",
-            "database": "connected" if db_healthy else "disconnected", 
-            "response_time_ms": round(response_time, 2),
-            "optimizations": {
-                "video_memory_manager": "active",
-                "database_optimizer": "active",
-                "feed_optimizer": "active",
-                "fast_upload": "active"
-            },
-            "performance_tips": [
-                "Use /api/polls/ultra-fast for best feed performance",
-                "Use /api/fast/upload/batch for multiple video uploads", 
-                "Enable ?optimized=true in frontend for TikTok scroll optimization"
-            ],
-            "timestamp": time.time()
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": time.time()
-        }
-
-@api_router.get("/media/thumbnail/{media_id}")
-async def get_thumbnail_lazy(
-    media_id: str,
-    size: str = "small"  # small, medium, large
-):
-    """
-    🖼️ LAZY THUMBNAILS: Generate/serve thumbnails on demand
-    - Avoids blocking main feed load
-    - Multiple sizes available
-    - Cached after first generation
-    """
-    try:
-        # This would normally generate thumbnail on demand
-        # For now, return placeholder or cached version
-        
-        thumbnail_sizes = {
-            "small": "150x150",
-            "medium": "300x300", 
-            "large": "600x600"
-        }
-        
-        # Check if cached thumbnail exists
-        # If not, generate asynchronously and return placeholder
-        
-        return {
-            "media_id": media_id,
-            "thumbnail_url": f"/api/uploads/thumbnails/{media_id}_{size}.jpg",
-            "size": thumbnail_sizes.get(size, "150x150"),
-            "cached": True  # Would check actual cache status
-        }
-        
-    except Exception as e:
-        print(f"❌ Thumbnail error: {str(e)}")
-        # Return placeholder
-        return {
-            "media_id": media_id,
-            "thumbnail_url": "/api/static/placeholder.jpg",
-            "size": "150x150",
-            "cached": False
-        }
-
-@api_router.get("/polls/analytics") 
-async def get_feed_analytics(
-    current_user: UserResponse = Depends(get_current_user)
-):
-    """
-    📊 FEED ANALYTICS: Performance metrics for optimization
-    """
-    try:
-        # Get basic stats
-        total_polls = await db.polls.count_documents({"is_active": True})
-        user_polls = await db.polls.count_documents({
-            "author_id": current_user.id,
-            "is_active": True
-        })
-        
-        # Get recent performance metrics
-        recent_polls = await db.polls.find(
-            {"created_at": {"$gte": datetime.utcnow() - timedelta(days=7)}},
-            {"total_votes": 1, "likes_count": 1, "created_at": 1}
-        ).to_list(100)
-        
-        avg_votes = sum(p.get("total_votes", 0) for p in recent_polls) / max(len(recent_polls), 1)
-        avg_likes = sum(p.get("likes_count", 0) for p in recent_polls) / max(len(recent_polls), 1)
-        
-        return {
-            "total_polls": total_polls,
-            "user_polls": user_polls,
-            "recent_activity": {
-                "posts_last_7_days": len(recent_polls),
-                "avg_votes_per_post": round(avg_votes, 1),
-                "avg_likes_per_post": round(avg_likes, 1)
-            },
-            "optimization_enabled": True,
-            "cache_status": "active"
-        }
-        
-    except Exception as e:
-        print(f"❌ Analytics error: {str(e)}")
-        return {"error": "Analytics temporarily unavailable"}
-
-@api_router.get("/polls/battles", response_model=List[PollResponse])
-async def get_battle_polls(
-    limit: int = 20,
-    offset: int = 0,
-    current_user: UserResponse = Depends(get_current_user)
-):
-    """Get VS/Battle polls (polls with layout='vs' or type='vs')"""
-    
-    # Build filter query for VS battles
     filter_query = {
         "is_active": True,
-        "status": {"$nin": ["broken", "hidden", "failed", "processing"]},  # 🩺 ocultar publicaciones rotas
-        "$or": [
-            {"layout": "vs"},
-            {"type": "vs"}
-        ]
+        "status": {"$nin": ["broken", "hidden", "failed", "processing"]},
+        "challenge_pending": {"$ne": True}
     }
+    if vs_only:
+        filter_query["$and"] = [
+            {"vs_id": {"$exists": True}},
+            {"vs_id": {"$ne": None}}
+        ]
     
-    # Get polls sorted by most recent
-    polls_cursor = db.polls.find(filter_query).sort("created_at", -1).skip(offset).limit(limit)
-    polls = await polls_cursor.to_list(limit)
+    if cursor:
+        filter_query["_id"] = {"$gt": cursor}
+    
+    polls_cursor = db.polls.find(filter_query, POLL_PROJECTION).sort("_id", 1).limit(limit + 1)
+    polls = await polls_cursor.to_list(limit + 1)
     
     if not polls:
         return []
@@ -7516,8 +7241,8 @@ async def get_following_polls(
     # Get users that current user follows
     follow_relationships_cursor = db.follows.find({
         "follower_id": current_user.id
-    })
-    follow_relationships = await follow_relationships_cursor.to_list(None)
+    }).limit(2000)
+    follow_relationships = await follow_relationships_cursor.to_list(2000)
     
     if not follow_relationships:
         return []
@@ -7531,15 +7256,11 @@ async def get_following_polls(
         "is_active": True,
         "status": {"$nin": ["broken", "hidden", "failed", "processing"]},  # 🩺 ocultar publicaciones rotas
         "author_id": {"$in": following_user_ids},
-        "$or": [
-            {"challenge_pending": {"$exists": False}},
-            {"challenge_pending": False},
-            {"challenge_pending": None}
-        ]
+        "challenge_pending": {"$ne": True}
     }
     
     # Get polls from followed users only
-    polls_cursor = db.polls.find(filter_query).sort("created_at", -1).skip(offset).limit(limit)
+    polls_cursor = db.polls.find(filter_query, POLL_PROJECTION).sort("created_at", -1).skip(offset).limit(limit)
     polls = await polls_cursor.to_list(limit)
     
     if not polls:
@@ -7610,32 +7331,48 @@ async def get_following_polls(
                 "avatar_url": u.get("avatar_url")
             }
 
+    # 🚀 BATCH: resolve all option_users, thumbnails, and music in parallel (not per-poll)
+    all_opt_user_ids = set()
+    thumbnail_jobs = []
+    thumbnail_keys = []
+    for p_idx, poll_data in enumerate(polls):
+        for o_idx, option in enumerate(poll_data.get("options", [])):
+            if option.get("user_id"):
+                all_opt_user_ids.add(option["user_id"])
+            if option.get("media_type") == "video" and option.get("media_url"):
+                thumbnail_jobs.append((option["media_url"], option.get("thumbnail_url")))
+                thumbnail_keys.append((p_idx, o_idx))
+    option_users_batch = {}
+    if all_opt_user_ids:
+        ou_cursor = db.users.find({"id": {"$in": list(all_opt_user_ids)}})
+        for u in await ou_cursor.to_list(len(all_opt_user_ids)):
+            option_users_batch[u["id"]] = u
+    thumb_map = {}
+    if thumbnail_jobs:
+        results = await asyncio.gather(*[resolve_video_thumbnail(mu, tu) for mu, tu in thumbnail_jobs])
+        for (p_idx, o_idx), thumb in zip(thumbnail_keys, results):
+            thumb_map[(p_idx, o_idx)] = thumb
+    music_ids = [pd.get("music_id") for pd in polls if pd.get("music_id")]
+    music_map = await batch_get_music_info(music_ids)
+
     # Build response (same logic as get_polls but for followed users only)
     result = []
-    for poll_data in polls:
-        # Get option users - handle options without user_id
-        option_user_ids = [option.get("user_id") for option in poll_data.get("options", []) if option.get("user_id")]
-        if option_user_ids:
-            option_users_cursor = db.users.find({"id": {"$in": option_user_ids}})
-            option_users_list = await option_users_cursor.to_list(len(option_user_ids))
-            option_users_dict = {user["id"]: user for user in option_users_list}
-        else:
-            option_users_dict = {}
+    for poll_idx, poll_data in enumerate(polls):
+        # Use batch-resolved option users
+        option_user_ids = [o.get("user_id") for o in poll_data.get("options", []) if o.get("user_id")]
+        option_users_dict = {uid: option_users_batch.get(uid) for uid in option_user_ids}
         
         # Process options
         options = []
-        for option in poll_data.get("options", []):
+        for o_idx, option in enumerate(poll_data.get("options", [])):
             option_user_id = option.get("user_id")
             option_user = option_users_dict.get(option_user_id) if option_user_id else None
             
             # Keep media_url as relative path for frontend to handle
             media_url = option.get("media_url")
             
-            # Get thumbnail URL for videos (handles legacy bogus thumbnail_url == media_url)
-            if option.get("media_type") == "video" and media_url:
-                thumbnail_url = await resolve_video_thumbnail(media_url, option.get("thumbnail_url"))
-            else:
-                thumbnail_url = option.get("thumbnail_url")
+            # Get thumbnail URL from batch result
+            thumbnail_url = thumb_map.get((poll_idx, o_idx)) or option.get("thumbnail_url")
             
             # Resolve mentioned_users from IDs to full objects
             raw_mentions = option.get("mentioned_users", [])
@@ -7682,37 +7419,21 @@ async def get_following_polls(
         # Calculate total votes
         total_votes = sum(opt["votes"] for opt in poll_data.get("options", []))
         
-        # Get music information
-        music_info = None
-        if poll_data.get("music_id"):
-            music_info = await get_music_info(poll_data["music_id"])
+        # Get music information (batch-resolved)
+        music_info = music_map.get(poll_data.get("music_id"))
         
-        # Resolve mentioned users to user objects
+        # Resolve mentioned users to user objects (batch-resolved)
         mentioned_users_data = []
         if poll_data.get("mentioned_users"):
-            mentioned_user_ids = poll_data.get("mentioned_users", [])
-            if mentioned_user_ids:
-                try:
-                    mentioned_users_cursor = db.users.find({"id": {"$in": mentioned_user_ids}})
-                    mentioned_users_list = await mentioned_users_cursor.to_list(len(mentioned_user_ids))
-                    
-                    # Log for debugging
-                    print(f"DEBUG: Found {len(mentioned_users_list)} users out of {len(mentioned_user_ids)} mentioned IDs for poll {poll_data['id']}")
-                    if len(mentioned_users_list) != len(mentioned_user_ids):
-                        print(f"DEBUG: Missing users for IDs: {set(mentioned_user_ids) - set(user['id'] for user in mentioned_users_list)}")
-                    
-                    mentioned_users_data = [
-                        MentionedUser(
-                            id=user["id"],
-                            username=user["username"],
-                            display_name=user.get("display_name"),
-                            avatar_url=user.get("avatar_url")
-                        ) 
-                        for user in mentioned_users_list
-                    ]
-                except Exception as e:
-                    print(f"DEBUG: Error resolving mentioned users for poll {poll_data['id']}: {e}")
-                    mentioned_users_data = []
+            for mu_id in poll_data.get("mentioned_users", []):
+                if isinstance(mu_id, str) and mu_id in mentioned_users_map:
+                    u = mentioned_users_map[mu_id]
+                    mentioned_users_data.append(MentionedUser(
+                        id=u["id"],
+                        username=u.get("username"),
+                        display_name=u.get("display_name"),
+                        avatar_url=u.get("avatar_url")
+                    ))
         
         poll_response = PollResponse(
             id=poll_data["id"],
@@ -7961,15 +7682,11 @@ async def get_user_polls(
         filter_query = {
             "author_id": target_user_id,
             "is_active": True,
-            "status": {"$nin": ["broken", "hidden", "failed", "processing"]},  # 🩺 ocultar publicaciones rotas
-            "$or": [
-                {"challenge_pending": {"$exists": False}},
-                {"challenge_pending": False},
-                {"challenge_pending": None}
-            ]
+            "status": {"$nin": ["broken", "hidden", "failed", "processing"]},
+            "challenge_pending": {"$ne": True}
         }
         
-        polls_cursor = db.polls.find(filter_query).sort("created_at", -1).skip(offset).limit(limit)
+        polls_cursor = db.polls.find(filter_query, POLL_PROJECTION).sort("created_at", -1).skip(offset).limit(limit)
         polls = await polls_cursor.to_list(limit)
         
         # Get author info
@@ -8245,7 +7962,7 @@ async def get_user_mentioned_polls(
                 # User mentioned in any option
                 {"options.mentioned_users": user_id}
             ]
-        }).sort("created_at", -1).skip(offset).limit(limit)
+        }, POLL_PROJECTION).sort("created_at", -1).skip(offset).limit(limit)
         
         polls = await polls_cursor.to_list(limit)
         
@@ -8283,41 +8000,54 @@ async def get_user_mentioned_polls(
         user_likes = await user_likes_cursor.to_list(len(poll_ids))
         user_likes_set = {like["poll_id"] for like in user_likes}
         
+        # 🏷️ BATCH: resolve all option_users and mentioned_users across all polls
+        all_opt_user_ids = set()
+        all_mentioned_ids = set()
+        for poll_data in polls:
+            for opt in poll_data.get("options", []):
+                if opt.get("user_id"):
+                    all_opt_user_ids.add(opt["user_id"])
+                for mu in opt.get("mentioned_users", []):
+                    if isinstance(mu, str):
+                        all_mentioned_ids.add(mu)
+            for mu in poll_data.get("mentioned_users", []):
+                if isinstance(mu, str):
+                    all_mentioned_ids.add(mu)
+        option_users_batch = {}
+        if all_opt_user_ids:
+            ou_cursor = db.users.find({"id": {"$in": list(all_opt_user_ids)}})
+            ou_list = await ou_cursor.to_list(len(all_opt_user_ids))
+            for u in ou_list:
+                option_users_batch[u["id"]] = u
+        mentioned_batch = {}
+        if all_mentioned_ids:
+            mu_cursor = db.users.find({"id": {"$in": list(all_mentioned_ids)}})
+            mu_list = await mu_cursor.to_list(len(all_mentioned_ids))
+            for u in mu_list:
+                mentioned_batch[u["id"]] = u
+
         # Process each poll and build response
         result = []
         for poll_data in polls:
-            # Get all option user IDs for this poll
-            option_user_ids = []
-            for option in poll_data.get("options", []):
-                if "user_id" in option:
-                    option_user_ids.append(option["user_id"])
-            
-            # Get option users
-            option_users_dict = {}
-            if option_user_ids:
-                option_users_cursor = db.users.find({"id": {"$in": option_user_ids}})
-                option_users = await option_users_cursor.to_list(len(option_user_ids))
-                option_users_dict = {user["id"]: user for user in option_users}
+            # Use batch-resolved option users
+            option_user_ids = [o["user_id"] for o in poll_data.get("options", []) if "user_id" in o]
+            option_users_dict = {uid: option_users_batch.get(uid) for uid in option_user_ids}
             
             # Build options with resolved mentioned_users
             options = []
             for option in poll_data.get("options", []):
                 option_user = option_users_dict.get(option.get("user_id"))
                 
-                # Resolve mentioned users for this option
+                # Resolve mentioned users for this option (batch-resolved)
                 resolved_mentioned_users = []
-                mentioned_user_ids = option.get("mentioned_users", [])
-                
-                if mentioned_user_ids:
-                    mentioned_users_cursor = db.users.find({"id": {"$in": mentioned_user_ids}})
-                    mentioned_users_data = await mentioned_users_cursor.to_list(len(mentioned_user_ids))
-                    
-                    for mentioned_user_data in mentioned_users_data:
+                for mu_id in option.get("mentioned_users", []):
+                    if isinstance(mu_id, str) and mu_id in mentioned_batch:
+                        u = mentioned_batch[mu_id]
                         resolved_mentioned_users.append({
-                            "id": mentioned_user_data["id"],
-                            "username": mentioned_user_data["username"],
-                            "display_name": mentioned_user_data.get("display_name", mentioned_user_data["username"]),
-                            "avatar_url": mentioned_user_data.get("avatar_url", "")
+                            "id": u["id"],
+                            "username": u["username"],
+                            "display_name": u.get("display_name", u["username"]),
+                            "avatar_url": u.get("avatar_url", "")
                         })
                 
                 # Handle media URLs
@@ -8354,20 +8084,16 @@ async def get_user_mentioned_polls(
             if not author:
                 continue
             
-            # Resolve poll-level mentioned users
+            # Resolve poll-level mentioned users (batch-resolved)
             poll_mentioned_users = []
-            poll_mentioned_user_ids = poll_data.get("mentioned_users", [])
-            
-            if poll_mentioned_user_ids:
-                poll_mentioned_cursor = db.users.find({"id": {"$in": poll_mentioned_user_ids}})
-                poll_mentioned_data = await poll_mentioned_cursor.to_list(len(poll_mentioned_user_ids))
-                
-                for mentioned_user_data in poll_mentioned_data:
+            for mu_id in poll_data.get("mentioned_users", []):
+                if isinstance(mu_id, str) and mu_id in mentioned_batch:
+                    u = mentioned_batch[mu_id]
                     poll_mentioned_users.append({
-                        "id": mentioned_user_data["id"],
-                        "username": mentioned_user_data["username"],
-                        "display_name": mentioned_user_data.get("display_name", mentioned_user_data["username"]),
-                        "avatar_url": mentioned_user_data.get("avatar_url", "")
+                        "id": u["id"],
+                        "username": u["username"],
+                        "display_name": u.get("display_name", u["username"]),
+                        "avatar_url": u.get("avatar_url", "")
                     })
             
             # Create poll response
@@ -9092,46 +8818,64 @@ async def get_poll_voters(
     votes_cursor = db.votes.find({"poll_id": poll_id}).sort("created_at", -1).skip(skip).limit(limit)
     votes = await votes_cursor.to_list(length=limit)
     
-    # Get user info for each vote
+    # Get user info for each vote (batched)
     voters = []
-    seen_users = set()  # To avoid duplicates if user voted multiple times
+    seen_users = set()
+    
+    # Batch resolve all unique voters at once
+    unique_voter_ids = []
+    for vote in votes:
+        uid = vote.get("user_id")
+        if uid and uid not in seen_users:
+            seen_users.add(uid)
+            unique_voter_ids.append(uid)
+    
+    voters_cursor = db.users.find({"id": {"$in": unique_voter_ids}})
+    voters_map = {v["id"]: v async for v in voters_cursor}
+    
+    # Batch resolve follow relationships for all voters at once
+    is_following_map = {}
+    follows_me_map = {}
+    if unique_voter_ids:
+        user_follows_cursor = db.follows.find({
+            "follower_id": current_user.id,
+            "following_id": {"$in": unique_voter_ids}
+        })
+        async for f in user_follows_cursor:
+            is_following_map[f["following_id"]] = True
+        
+        me_follows_cursor = db.follows.find({
+            "follower_id": {"$in": unique_voter_ids},
+            "following_id": current_user.id
+        })
+        async for f in me_follows_cursor:
+            follows_me_map[f["follower_id"]] = True
     
     for vote in votes:
         user_id = vote.get("user_id")
-        if user_id and user_id not in seen_users:
-            seen_users.add(user_id)
-            user = await db.users.find_one({"id": user_id})
-            if user:
-                # Check if current user follows this voter
-                is_following = await db.follows.find_one({
-                    "follower_id": current_user.id,
-                    "following_id": user_id
-                }) is not None
-                
-                # Check if this voter follows the current user
-                follows_me = await db.follows.find_one({
-                    "follower_id": user_id,
-                    "following_id": current_user.id
-                }) is not None
-                
-                # Get which option they voted for
-                option_index = vote.get("option_index")
-                option_text = None
-                if option_index is not None and poll.get("options"):
-                    if 0 <= option_index < len(poll["options"]):
-                        option_text = poll["options"][option_index].get("text", "")
-                
-                voters.append({
-                    "id": user.get("id"),
-                    "username": user.get("username"),
-                    "display_name": user.get("display_name", user.get("username")),
-                    "avatar_url": user.get("avatar_url"),
-                    "is_verified": user.get("is_verified", False),
-                    "is_following": is_following,
-                    "follows_me": follows_me,
-                    "voted_at": vote.get("created_at"),
-                    "voted_option": option_text
-                })
+        if user_id and user_id in voters_map:
+            user = voters_map[user_id]
+            is_following = user_id in is_following_map
+            follows_me = user_id in follows_me_map
+            
+            # Get which option they voted for
+            option_index = vote.get("option_index")
+            option_text = None
+            if option_index is not None and poll.get("options"):
+                if 0 <= option_index < len(poll["options"]):
+                    option_text = poll["options"][option_index].get("text", "")
+            
+            voters.append({
+                "id": user.get("id"),
+                "username": user.get("username"),
+                "display_name": user.get("display_name", user.get("username")),
+                "avatar_url": user.get("avatar_url"),
+                "is_verified": user.get("is_verified", False),
+                "is_following": is_following,
+                "follows_me": follows_me,
+                "voted_at": vote.get("created_at"),
+                "voted_option": option_text
+            })
     
     # Get total votes count (unique users)
     all_votes = await db.votes.find({"poll_id": poll_id}).to_list(length=None)
@@ -9437,15 +9181,15 @@ async def upload_audio(
             unique_filename = get_unique_filename(current_user.id, file.filename)
             final_path = AUDIO_UPLOAD_DIR / unique_filename.replace(unique_filename.split('.')[-1], 'mp3')
             
-            # Procesar audio (recortar, optimizar, generar waveform)
-            processing_result = process_audio_file(temp_file, max_duration=60)
+            # Procesar audio (recortar, optimizar, generar waveform) en thread separado
+            processing_result = await asyncio.to_thread(process_audio_file, temp_file, max_duration=60)
             
             if not processing_result['success']:
                 raise AudioProcessingError(processing_result['error'])
             
-            # Mover archivo procesado a ubicación final
+            # Mover archivo procesado a ubicación final (IO bloqueante en thread)
             import shutil
-            shutil.move(processing_result['processed_path'], str(final_path))
+            await asyncio.to_thread(shutil.move, processing_result['processed_path'], str(final_path))
             
             # Obtener tamaño del archivo final
             file_size = os.path.getsize(final_path)
@@ -9626,11 +9370,16 @@ async def get_public_audio_library(
             .limit(limit) \
             .to_list(limit)
         
-        # Preparar respuesta con información de los usuarios
+        # Preparar respuesta con información de los usuarios (batched)
         audio_responses = []
+        uploader_ids = list(set(a["uploader_id"] for a in user_audios))
+        uploaders_map = {}
+        if uploader_ids:
+            up_cursor = db.users.find({"id": {"$in": uploader_ids}})
+            uploaders_map = {u["id"]: u async for u in up_cursor}
+        
         for audio_data in user_audios:
-            # Obtener información del usuario que subió el audio
-            uploader = await db.users.find_one({"id": audio_data["uploader_id"]})
+            uploader = uploaders_map.get(audio_data["uploader_id"])
             if uploader:
                 uploader_response = UserResponse(**uploader)
                 
@@ -9958,9 +9707,14 @@ async def search_user_audio(
         
         # Preparar respuesta
         audio_responses = []
+        uploader_ids = list(set(a["uploader_id"] for a in user_audios))
+        uploaders_map = {}
+        if uploader_ids:
+            up_cursor = db.users.find({"id": {"$in": uploader_ids}})
+            uploaders_map = {u["id"]: u async for u in up_cursor}
+        
         for audio_data in user_audios:
-            # Obtener información del uploader
-            uploader = await db.users.find_one({"id": audio_data["uploader_id"]})
+            uploader = uploaders_map.get(audio_data["uploader_id"])
             if uploader:
                 uploader_response = UserResponse(**uploader)
                 
@@ -10442,9 +10196,15 @@ async def get_combined_music_library(
             .limit(25) \
             .to_list(25)
         
-        # Convertir user audios al formato de música del sistema
+        # Convertir user audios al formato de música del sistema (batched)
+        uploader_ids = list(set(a["uploader_id"] for a in user_audios))
+        uploaders_map = {}
+        if uploader_ids:
+            up_cursor = db.users.find({"id": {"$in": uploader_ids}})
+            uploaders_map = {u["id"]: u async for u in up_cursor}
+        
         for audio_data in user_audios:
-            uploader = await db.users.find_one({"id": audio_data["uploader_id"]})
+            uploader = uploaders_map.get(audio_data["uploader_id"])
             if uploader:
                 # Formato compatible con el sistema de música existente
                 music_item = {
@@ -11778,17 +11538,26 @@ async def get_user_social_links_by_id(
 # Agregar middleware CORS ANTES de incluir routers
 app.add_middleware(
     CORSMiddleware,
-    # allow_origin_regex permite cualquier origen (incluyendo https://localhost
-    # de Capacitor WebView, capacitor://localhost de iOS, y cualquier dominio web)
-    # manteniendo allow_credentials=True de forma válida según el estándar CORS.
-    # El regex .* matchea cualquier origin, pero el middleware lo refleja en la
-    # respuesta Access-Control-Allow-Origin (NO envía "*"), lo que es compatible
-    # con credentials.
     allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 🚀 GZip compression for feed responses (reduces JSON payload ~80%)
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
+# 🚀 Cache-Control headers for feed endpoints (browser + CDN caching)
+@app.middleware("http")
+async def add_cache_headers(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/polls/ultra-fast") or path.startswith("/api/polls/cursor"):
+        response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=60"
+        response.headers["Surrogate-Control"] = "public, max-age=30"
+    elif path.startswith("/api/polls") and request.method == "GET":
+        response.headers["Cache-Control"] = "private, max-age=15, stale-while-revalidate=30"
+    return response
 
 # =============  SEARCH HISTORY ENDPOINTS =============
 
@@ -12033,10 +11802,14 @@ async def create_challenge(
         if len(challenge_data.participant_ids) > 5:
             raise HTTPException(status_code=400, detail="Máximo 5 usuarios invitados permitidos (6 total con creador)")
         
-        # Obtener información de los participantes
+        # Obtener información de los participantes (batched)
         participants = []
+        if challenge_data.participant_ids:
+            p_cursor = db.users.find({"id": {"$in": challenge_data.participant_ids}})
+            users_map = {u["id"]: u async for u in p_cursor}
+        
         for participant_id in challenge_data.participant_ids:
-            user = await db.users.find_one({"id": participant_id})
+            user = users_map.get(participant_id)
             if not user:
                 raise HTTPException(status_code=404, detail=f"Usuario {participant_id} no encontrado")
             
@@ -12935,11 +12708,10 @@ async def get_challenge_polls(
                 "id": poll.get("id"),
                 "title": poll.get("title"),
                 "author": author,
-                "authorUser": author,
                 "options": transformed_options,
                 "created_at": poll.get("created_at"),
-                "total_votes": poll.get("total_votes", 0),
-                "likes_count": poll.get("likes_count", 0),
+                "totalVotes": poll.get("total_votes", 0),
+                "likes": poll.get("likes_count", 0),
                 "comments_count": poll.get("comments_count", 0),
                 "layout": poll.get("layout"),
                 "challenge_id": challenge_id
@@ -13390,8 +13162,7 @@ async def upload_story_media(
         width = height = None
         if is_image:
             try:
-                with Image.open(file_path) as img:
-                    width, height = img.size
+                width, height = await asyncio.to_thread(_get_image_dimensions_sync, file_path)
             except Exception as e:
                 logger.error(f"Error getting image dimensions: {str(e)}")
         
@@ -13400,15 +13171,14 @@ async def upload_story_media(
         if is_video:
             thumbnail_filename = f"{uuid.uuid4()}_thumb.jpg"
             thumbnail_path = Path(f"/app/backend/uploads/stories/{thumbnail_filename}")
-            # Generate thumbnail using first frame (if OpenCV available)
+            # Generate thumbnail using first frame (offloaded to thread)
             if OPENCV_AVAILABLE:
                 try:
-                    cap = cv2.VideoCapture(str(file_path))
-                    ret, frame = cap.read()
-                    if ret:
-                        cv2.imwrite(str(thumbnail_path), frame)
-                        thumbnail_url = f"/api/uploads/stories/{thumbnail_filename}"
-                    cap.release()
+                    thumb_url = await asyncio.to_thread(
+                        _generate_video_thumbnail_sync, str(file_path), str(thumbnail_path), thumbnail_filename
+                    )
+                    if thumb_url:
+                        thumbnail_url = thumb_url
                 except Exception as e:
                     logger.error(f"Error generating video thumbnail: {str(e)}")
         
@@ -13495,7 +13265,7 @@ async def create_vs_experience(
         # Si el cliente ya envió `media_type` / `thumbnail_url`, se respeta lo
         # que vino (caso de upload directo en el flow nuevo). Si no, se detecta
         # y genera aquí.
-        def _enrich_vs_option(opt: VSOption) -> dict:
+        async def _enrich_vs_option(opt: VSOption) -> dict:
             opt_id = str(opt.id)
             opt_text = str(opt.text) if opt.text else ""
             media_url = str(opt.image) if opt.image else None
@@ -13538,7 +13308,7 @@ async def create_vs_experience(
                                     "general": UploadType.GENERAL,
                                 }
                                 ut = upload_type_map.get(category, UploadType.GENERAL)
-                                gen_thumb = get_video_thumbnail_url(str(file_path), ut)
+                                gen_thumb = await get_video_thumbnail_url(str(file_path), ut)
                                 if gen_thumb and not re.search(r"\.(mp4|mov|webm|avi|m4v|mkv)(\?|$)", gen_thumb, re.IGNORECASE):
                                     real_thumb = gen_thumb
                     except Exception as e:
@@ -13565,7 +13335,7 @@ async def create_vs_experience(
         questions = []
         for idx, q in enumerate(vs_data.questions):
             question_id = str(uuid.uuid4())
-            options = [_enrich_vs_option(opt) for opt in q.options]
+            options = await asyncio.gather(*[_enrich_vs_option(opt) for opt in q.options])
             questions.append({
                 "id": question_id,
                 "options": options

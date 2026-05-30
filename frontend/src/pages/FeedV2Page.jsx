@@ -75,13 +75,24 @@ export default function FeedV2Page() {
   const prefetchAround = useCallback((index) => {
     const list = pollsRef.current;
     if (!list || list.length === 0) return;
-    const VIDEO_AHEAD = 3; // nº de vídeos a calentar por delante
-    const THUMB_AHEAD = 6; // nº de pósters a precargar por delante
+    // Profundidad de prefetch de VÍDEO adaptativa a la red: en 4G precargamos
+    // agresivo (sin esperas); en redes lentas reducimos para NO saturar la
+    // conexión y que el vídeo ACTIVO no se atasque (el sobre-prefetch puede
+    // causar el propio atasco que queremos evitar). Los pósters son baratos.
+    let videoAhead = 3;
+    try {
+      const c = navigator.connection;
+      if (c?.saveData) videoAhead = 1;
+      else if (c?.effectiveType === '3g') videoAhead = 2;
+      else if (c?.effectiveType === '2g' || c?.effectiveType === 'slow-2g') videoAhead = 1;
+      else videoAhead = 3; // 4g / desconocido
+    } catch (_) {}
+    const THUMB_AHEAD = 8; // pósters: baratos, precargamos más para 0 esperas visuales
     // Diferir el trabajo de prefetch fuera del frame de la animación de snap
     // (crear Image(), iniciar fetch...) → scroll más fluido, sin micro-jank.
     const run = () => {
       try { thumbnailPrefetch.prefetchAroundIndex(list, index, THUMB_AHEAD); } catch (_) {}
-      try { feedMediaPrefetcher.prefetchVideosAroundIndex(list, index, VIDEO_AHEAD); } catch (_) {}
+      try { feedMediaPrefetcher.prefetchVideosAroundIndex(list, index, videoAhead); } catch (_) {}
       try { feedMediaPrefetcher.cancelDistantPolls(index, 4); } catch (_) {}
     };
     if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {

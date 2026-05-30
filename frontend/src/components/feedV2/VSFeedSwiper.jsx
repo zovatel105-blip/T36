@@ -13,7 +13,7 @@
  *   - `isNear`:   slide adyacente (±1) → preload poster + 256KB del video.
  *   - `muted`:    estado global de audio (toggle desde TopBar).
  */
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, useDeferredValue } from 'react';
 import { Swiper, SwiperSlide } from 'swiper/react';
 import { Virtual, Mousewheel, Keyboard } from 'swiper/modules';
 import VSSlideV2 from './VSSlideV2';
@@ -21,10 +21,12 @@ import feedMediaPrefetcher from '../../services/feedMediaPrefetcher';
 import 'swiper/css';
 import 'swiper/css/virtual';
 
-// Ventana de renderizado de CONTENIDO: solo los slides a distancia <= este
-// valor montan el árbol pesado (TikTokPollCard). El resto = placeholder negro.
-// Esto evita que, al paginar, 40+ tarjetas pesadas estén montadas a la vez.
-const RENDER_WINDOW = 3;
+// Ventana de renderizado de CONTENIDO (asimétrica, ponderada hacia la dirección
+// del scroll). Solo los slides dentro de [-BEHIND, +AHEAD] del activo montan el
+// árbol pesado (TikTokPollCard); el resto = placeholder negro. Así evitamos que
+// al paginar 40+ posts haya decenas de tarjetas pesadas montadas a la vez.
+const WINDOW_BEHIND = 1; // slides montados hacia atrás
+const WINDOW_AHEAD = 3;  // slides montados hacia adelante (más buffer)
 
 export default function VSFeedSwiper({
   polls,
@@ -86,7 +88,7 @@ export default function VSFeedSwiper({
         direction="vertical"
         slidesPerView={1}
         spaceBetween={0}
-        speed={300}
+        speed={280}
         resistance={false}
         resistanceRatio={0}
         touchRatio={1}
@@ -123,12 +125,13 @@ export default function VSFeedSwiper({
         data-testid="vs-feed-swiper"
       >
         {polls.map((poll, idx) => {
-          const distance = Math.abs(idx - activeIndex);
-          const isActive = idx === activeIndex;
-          // Windowing de contenido: fuera de la ventana montamos un placeholder
-          // negro barato en lugar del árbol pesado. Al entrar en la ventana, el
-          // contenido monta y muestra el póster (ya prefetcheado) al instante.
-          const withinWindow = distance <= RENDER_WINDOW;
+          const delta = idx - activeIndex; // <0 arriba, >0 abajo
+          const distance = Math.abs(delta);
+          const isActive = delta === 0;
+          // Windowing asimétrico: montamos contenido en [-BEHIND, +AHEAD].
+          // El slide que se volverá activo siempre estaba dentro de la ventana,
+          // así que nunca hay "flash" en el activo; los lejanos liberan memoria.
+          const withinWindow = delta >= -WINDOW_BEHIND && delta <= WINDOW_AHEAD;
           return (
             <SwiperSlide
               key={poll.id || idx}

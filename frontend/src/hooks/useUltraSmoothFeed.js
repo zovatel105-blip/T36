@@ -18,15 +18,28 @@ const useUltraSmoothFeed = ({ enabled = true, containerRef }) => {
       document.head.appendChild(link);
       cleanups.push(() => document.head.removeChild(link));
     }
+    
+    // Preconnect para HLS streaming (si usa dominio separado)
+    const hlsOrigin = 'https://manifest.googlevideo.com';
+    const hlsLink = document.createElement('link');
+    hlsLink.rel = 'preconnect';
+    hlsLink.href = hls_origin;
+    document.head.appendChild(hlsLink);
+    cleanups.push(() => document.head.removeChild(hlsLink));
 
     // 2. Forzar will-change optimizado en el contenedor del feed
     if (containerRef?.current) {
-      containerRef.current.style.willChange = 'transform';
-      containerRef.current.style.contain = 'paint';
+      const container = containerRef.current;
+      container.style.willChange = 'transform';
+      container.style.contain = 'paint layout';
+      container.style.transform = 'translateZ(0)';
+      container.style.backfaceVisibility = 'hidden';
       cleanups.push(() => {
         if (containerRef.current) {
           containerRef.current.style.willChange = 'auto';
           containerRef.current.style.contain = '';
+          containerRef.current.style.transform = '';
+          containerRef.current.style.backfaceVisibility = '';
         }
       });
     }
@@ -41,10 +54,37 @@ const useUltraSmoothFeed = ({ enabled = true, containerRef }) => {
           -webkit-overflow-scrolling: auto !important;
           overflow-scrolling: auto !important;
         }
+        .snaptok-swiper .swiper-wrapper {
+          transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+          will-change: transform;
+        }
+        .snaptok-swiper .swiper-slide {
+          backface-visibility: hidden;
+          transform: translateZ(0);
+          will-change: contents, transform;
+        }
       `;
       document.head.appendChild(style);
       cleanups.push(() => {
         const el = document.getElementById('ultra-smooth-feed-force');
+        if (el) document.head.removeChild(el);
+      });
+    } catch (_) {}
+
+    // 4. Optimización de GPU: forzar composición por capa
+    try {
+      const gpuStyle = document.createElement('style');
+      gpuStyle.id = 'gpu-composition';
+      gpuStyle.textContent = `
+        .snaptok-swiper,
+        .snaptok-swiper * {
+          transform: translateZ(0);
+          -webkit-transform: translateZ(0);
+        }
+      `;
+      document.head.appendChild(gpuStyle);
+      cleanups.push(() => {
+        const el = document.getElementById('gpu-composition');
         if (el) document.head.removeChild(el);
       });
     } catch (_) {}

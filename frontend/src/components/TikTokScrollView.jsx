@@ -40,6 +40,7 @@ import { useNavPreference } from '../hooks/useNavPreference';
 import { useTikTok } from '../contexts/TikTokContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import useUltraSmoothFeed from '../hooks/useUltraSmoothFeed';
+import { useHaptic } from '../hooks/useHaptic';
 import { setFastScrolling } from '../utils/scrollVelocityTracker';
 
 // Helper function to render text with clickable hashtags
@@ -188,6 +189,9 @@ const TikTokPollCardInner = ({
   const isBottomNavBarShown = isBottomNav && !hideRightNavigation;
   const [isCommentsExpanded, setIsCommentsExpanded] = useState(false);
   const [isVotersExpanded, setIsVotersExpanded] = useState(false);
+  
+  // 📳 HAPTIC FEEDBACK - Vibración táctil tipo app nativa
+  const { vibrate } = useHaptic();
 
   // 🚀 FIX F5 — Lazy-mount de modales con persistencia.
   // ANTES: Los 5 modales (Comments/PostDetail/Voters/ChallengeParticipants/
@@ -240,6 +244,66 @@ const TikTokPollCardInner = ({
       window.removeEventListener('vs:userVote', onUserVote);
     };
   }, []);
+  
+  // 👁️ INTERSECTION OBSERVER para autoplay/pause basado en visibilidad REAL
+  // TikTok Web usa visibilidad en viewport, no solo índice activo.
+  // Esto detecta cuándo el video está realmente visible (>60%) y hace play,
+  // o cuándo está parcialmente oculto (<30%) y hace pause.
+  const containerRef = useRef(null);
+  const videoObserverRef = useRef(null);
+  
+  useEffect(() => {
+    if (!isActive || !isVisible || distanceFromActive !== 0) {
+      // Solo observar el slot activo y visible
+      return;
+    }
+    
+    // Crear Intersection Observer con thresholds múltiples
+    videoObserverRef.current = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const video = entry.target;
+          const ratio = entry.intersectionRatio;
+          
+          // Play si >60% visible y tiene buffer suficiente
+          if (ratio > 0.6 && video.paused && video.readyState >= 2) {
+            video.play().catch(() => {
+              // Autoplay policy puede bloquear, ignorar
+            });
+          } 
+          // Pause si <30% visible para liberar decoder
+          else if (ratio < 0.3 && !video.paused) {
+            video.pause();
+          }
+        });
+      },
+      {
+        threshold: [0, 0.25, 0.5, 0.6, 0.75, 1], // Múltiples thresholds
+        root: containerRef.current?.parentElement || null,
+        rootMargin: '0px',
+      }
+    );
+    
+    // Observar todos los videos del card después de un breve delay
+    const observeTimer = setTimeout(() => {
+      if (containerRef.current) {
+        const videos = containerRef.current.querySelectorAll('video');
+        videos.forEach(v => {
+          if (videoObserverRef.current) {
+            videoObserverRef.current.observe(v);
+          }
+        });
+      }
+    }, 100);
+    
+    return () => {
+      clearTimeout(observeTimer);
+      if (videoObserverRef.current) {
+        videoObserverRef.current.disconnect();
+      }
+    };
+  }, [isActive, isVisible, distanceFromActive]);
+  
   const getDisplayedTotalVotes = (p) => {
     const override = vsTotalsOverride[p?.id];
     const base = Number(p?.totalVotes) || 0;
@@ -568,6 +632,7 @@ const TikTokPollCardInner = ({
   const handleVote = (optionId) => {
     if (!poll.userVote) {
       onVote(poll.id, optionId);
+      vibrate('medium'); // 📳 Feedback háptico al votar
     }
   };
 
@@ -1784,6 +1849,11 @@ const TikTokScrollView = ({
   // Swipe rápido → 180ms, swipe lento → 280ms. Igual que TikTok.
   const [transitionDuration, setTransitionDuration] = useState(250);
   const swipeStartTimeRef = useRef(null);
+  
+  // 🚀 FAST-SCROLL CASCADE - Contador de swipes rápidos para detección agresiva
+  // TikTok suspende TODO prefetch durante cascadas ultra-rápidas (3+ swipes en 500ms)
+  const fastScrollCountRef = useRef(0);
+  const fastScrollTimerRef = useRef(null);
 
   // Pull-to-refresh
   const [pullDistance, setPullDistance] = useState(0);
@@ -2361,6 +2431,15 @@ const TikTokScrollView = ({
     swipeStartTimeRef.current = Date.now();
     velocitySamplesRef.current = [{ y: touchStartYRef.current, t: swipeStartTimeRef.current }];
 
+    // 👆 TOUCH FEEDBACK VISUAL - Highlight sutil al tocar (tipo ripple)
+    const target = e.currentTarget;
+    if (target) {
+      target.style.setProperty('--touch-feedback-opacity', '0.15');
+      setTimeout(() => {
+        target.style.removeProperty('--touch-feedback-opacity');
+      }, 150);
+    }
+
     // 🚀 BYPASS REACT: marcamos drag activo y desactivamos transición en el
     // tape vía DOM directo. Cualquier re-render accidental durante el drag
     // verá `dragActiveRef=true` y mantendrá el transform actual.
@@ -2519,11 +2598,40 @@ const TikTokScrollView = ({
     // contenido que el usuario va a saltar.
     // El tracker tiene auto-release a los 250ms de inactividad → cuando el
     // scroll se estabiliza, los slots vuelven a cargar HLS automáticamente.
+    
+    // 🚀 MEJORA: Detección de cascada de swipes (3+ en 500ms)
+    // TikTok suspende TODO prefetch durante cascadas ultra-rápidas
+    const now = Date.now();
     if (shouldCommit && isFlick) {
-      setFastScrolling(true);
+      fastScrollCountRef.current += 1;
+      
+      // Si 3+ swipes en 500ms, suspender TODO prefetch agresivamente
+      if (fastScrollCountRef.current >= 3) {
+        setFastScrolling(true);
+        // Cancelar prefetches de TODOS los posts lejanos
+        try {
+          const aborted = feedMediaPrefetcher?.cancelDistantPolls?.(activeIndex, 1);
+          if (aborted > 0) {
+            console.log(`🚫 Fast-scroll cascade: cancelled ${aborted} prefetches`);
+          }
+        } catch (_) {}
+      } else {
+        setFastScrolling(true);
+      }
+      
+      // Resetear contador tras 500ms de inactividad
+      if (fastScrollTimerRef.current) {
+        clearTimeout(fastScrollTimerRef.current);
+      }
+      fastScrollTimerRef.current = setTimeout(() => {
+        fastScrollCountRef.current = 0;
+        setFastScrolling(false);
+      }, 500);
+      
     } else if (shouldCommit) {
       // Commit lento (drag completo, sin flick) → es scroll deliberado.
       // No marcamos fast; los slots cargan HLS normalmente.
+      fastScrollCountRef.current = 0;
       setFastScrolling(false);
     }
 
@@ -2611,7 +2719,13 @@ const TikTokScrollView = ({
 
   // ─── LIFECYCLE ────────────────────────────────────────────────────────────
   useEffect(() => {
-    return () => { audioManager.stop().catch(() => {}); };
+    return () => {
+      audioManager.stop().catch(() => {});
+      // Cleanup fast-scroll cascade timer
+      if (fastScrollTimerRef.current) {
+        clearTimeout(fastScrollTimerRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -2806,6 +2920,50 @@ const TikTokScrollView = ({
       }
     };
   }, [activeIndex, polls]);
+  
+  // 🔗 PREFETCH CON LINK TAGS - Precalentamiento de recursos críticos
+  // TikTok Web usa <link rel="prefetch"> y <link rel="preload"> para
+  // recursos del próximo post. Esto le dice al browser que descargue
+  // en background con baja prioridad, sin bloquear el hilo principal.
+  useEffect(() => {
+    const nextPoll = polls[activeIndex + 1];
+    if (!nextPoll || !isHighBandwidth) return;
+    
+    const prefetchLinks = [];
+    
+    // Prefetch posters de todas las opciones
+    nextPoll.options?.forEach(opt => {
+      const posterUrl = pickVideoPosterUrl(opt);
+      if (posterUrl) {
+        const link = document.createElement('link');
+        link.rel = 'prefetch';
+        link.href = posterUrl;
+        link.as = 'image';
+        document.head.appendChild(link);
+        prefetchLinks.push(link);
+      }
+      
+      // Preload del primer segmento de video (si es MP4)
+      const videoUrl = pickPlayableVideoUrl(opt);
+      if (videoUrl && videoUrl.endsWith('.mp4')) {
+        const link = document.createElement('link');
+        link.rel = 'preload';
+        link.href = videoUrl;
+        link.as = 'video';
+        document.head.appendChild(link);
+        prefetchLinks.push(link);
+      }
+    });
+    
+    // Cleanup: remover links cuando el post ya no es el "next"
+    return () => {
+      prefetchLinks.forEach(link => {
+        if (link.parentNode) {
+          link.parentNode.removeChild(link);
+        }
+      });
+    };
+  }, [activeIndex, polls, isHighBandwidth]);
 
   // ─── SAVED/SHARED POLLS ───────────────────────────────────────────────────
   useEffect(() => {
@@ -2988,7 +3146,49 @@ const TikTokScrollView = ({
                 {...sharedCardProps}
               />
             ) : (
-              <div style={{ width: '100%', height: '100%', background: 'black' }} />
+              // 🦴 SKELETON LOADING - Placeholder animado mientras carga el post
+              // TikTok-style: skeletons locales para carga visual instantánea
+              <div className="absolute inset-0 bg-black overflow-hidden animate-pulse">
+                {/* Header skeleton */}
+                <div className="absolute top-4 left-4 flex items-center gap-2 z-10"
+                     style={{ paddingTop: 'var(--safe-area-inset-top, 0px)' }}>
+                  <div className="w-10 h-10 rounded-full bg-gray-800" />
+                  <div className="space-y-2">
+                    <div className="w-24 h-3 bg-gray-800 rounded" />
+                    <div className="w-16 h-2 bg-gray-900 rounded" />
+                  </div>
+                </div>
+                
+                {/* Contenido central skeleton */}
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-32 h-32 rounded-xl bg-gray-900" 
+                       style={{ animationDelay: '0.1s' }} />
+                </div>
+                
+                {/* Actions skeleton (derecha) */}
+                <div className="absolute right-3 bottom-32 flex flex-col gap-4 z-10">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="flex flex-col items-center gap-1">
+                      <div className="w-8 h-8 rounded-full bg-gray-800"
+                           style={{ animationDelay: `${i * 0.1}s` }} />
+                      <div className="w-6 h-2 rounded bg-gray-900"
+                           style={{ animationDelay: `${i * 0.1 + 0.05}s` }} />
+                    </div>
+                  ))}
+                </div>
+                
+                {/* Footer skeleton (audio info) */}
+                <div className="absolute bottom-0 left-0 right-0 px-4 pb-8 flex items-center gap-3 z-10">
+                  <div className="w-10 h-10 rounded-full bg-gray-800" />
+                  <div className="flex-1 space-y-2">
+                    <div className="w-48 h-3 bg-gray-800 rounded" />
+                    <div className="w-32 h-2 bg-gray-900 rounded" />
+                  </div>
+                </div>
+                
+                {/* Overlay gradiente inferior */}
+                <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
+              </div>
             )}
           </div>
           );
@@ -3015,6 +3215,10 @@ const TikTokScrollView = ({
         * {
           -webkit-tap-highlight-color: transparent;
           -webkit-touch-callout: none;
+        }
+        /* 👆 TOUCH FEEDBACK VISUAL - Highlight sutil al tocar */
+        [data-tape] {
+          --touch-feedback-opacity: 0;
         }
         .snaptok-swiper .swiper-slide {
           contain: layout style paint;

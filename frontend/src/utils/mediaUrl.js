@@ -90,4 +90,75 @@ export const pickImageUrl = (option) => {
   return resolveAssetUrl(src);
 };
 
+/**
+ * 🚀 ADAPTIVE BITRATE - Selecciona calidad de video según ancho de banda
+ * 
+ * TikTok Web usa adaptive bitrate streaming: cambia dinámicamente la calidad
+ * del video (360p → 480p → 720p → 1080p) según el downlink en tiempo real.
+ * 
+ * Esto reduce el buffering en redes lentas y mejora la calidad en redes rápidas.
+ * 
+ * @param {object} option - option de un poll con múltiples calidades
+ * @param {number} downlink - velocidad de red en Mbps (navigator.connection.downlink)
+ * @returns {string|null} URL de video optimizada para el ancho de banda actual
+ * 
+ * Ejemplo de uso:
+ *   const { downlink } = navigator.connection || { downlink: 5 };
+ *   const videoUrl = pickAdaptiveVideoUrl(option, downlink);
+ * 
+ * Requisitos backend:
+ *   El backend debe proveer múltiples calidades:
+ *   - option.video_360p_url (para <1.5 Mbps)
+ *   - option.video_480p_url (para 1.5-3 Mbps)
+ *   - option.video_720p_url (para 3-5 Mbps)
+ *   - option.video_1080p_url (para >=5 Mbps)
+ */
+export const pickAdaptiveVideoUrl = (option, downlink = 5) => {
+  if (!option) return null;
+  
+  // Definir calidades disponibles ordenadas por bitrate
+  const qualities = [
+    { url: option.video_360p_url, maxDownlink: 1.5, label: '360p', priority: 1 },
+    { url: option.video_480p_url, maxDownlink: 3, label: '480p', priority: 2 },
+    { url: option.video_720p_url, maxDownlink: 5, label: '720p', priority: 3 },
+    { url: option.video_1080p_url, maxDownlink: Infinity, label: '1080p', priority: 4 },
+  ];
+  
+  // Filtrar calidades disponibles (URL no nula)
+  const availableQualities = qualities.filter(q => q.url);
+  
+  if (availableQualities.length === 0) {
+    // Fallback a pickPlayableVideoUrl si no hay calidades múltiples
+    return pickPlayableVideoUrl(option);
+  }
+  
+  // Encontrar la mejor calidad para el downlink actual
+  const selected = availableQualities.find(q => downlink < q.maxDownlink);
+  
+  // Si encontramos una calidad adecuada, usarla
+  if (selected) {
+    return resolveAssetUrl(selected.url);
+  }
+  
+  // Fallback: usar la calidad más alta disponible
+  const highestQuality = availableQualities[availableQualities.length - 1];
+  return resolveAssetUrl(highestQuality.url);
+};
+
+/**
+ * Helper para obtener downlink actual (con fallback seguro)
+ * @returns {number} downlink en Mbps (default: 5 para WiFi)
+ */
+export const getCurrentDownlink = () => {
+  try {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (connection?.downlink) {
+      return connection.downlink;
+    }
+  } catch (error) {
+    // Ignorar errores (puede fallar en algunos browsers)
+  }
+  return 5; // Default: WiFi / conexión rápida
+};
+
 export default pickPlayableVideoUrl;

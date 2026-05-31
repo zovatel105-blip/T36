@@ -27,6 +27,7 @@ import { Loader2 } from 'lucide-react';
 import VSFeedSwiper from '../components/feedV2/VSFeedSwiper';
 import VSFeedTopBar from '../components/feedV2/VSFeedTopBar';
 import VSSlidePretty from '../components/feedV2/VSSlidePretty';
+import FeedSkeleton from '../components/FeedSkeleton';
 import { FeedInteractionProvider } from '../contexts/FeedInteractionContext';
 import pollService from '../services/pollService';
 import feedMediaPrefetcher from '../services/feedMediaPrefetcher';
@@ -35,8 +36,10 @@ import { useTikTok } from '../contexts/TikTokContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { useAddiction } from '../contexts/AddictionContext';
+import { setFastScrolling } from '../utils/scrollVelocityTracker';
 
 const PAGE_SIZE = 20;
+const SHOW_SKELETON_UNTIL_MS = 300; // Mostrar skeleton mínimo 300ms para transición suave
 
 export default function FeedV2Page() {
   const navigate = useNavigate();
@@ -47,10 +50,14 @@ export default function FeedV2Page() {
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [muted, setMuted] = useState(true);
+  const [showSkeleton, setShowSkeleton] = useState(true);
 
   const { isAuthenticated, user } = useAuth();
   const { toast } = useToast();
   const { trackAction } = useAddiction();
+  
+  // Timer para mostrar skeleton mínimo (evita flash si carga es rápida)
+  const skeletonTimerRef = useRef(null);
 
   // Refs de control (no provocan re-render)
   const loadingRef = useRef(false);       // evita load-more concurrente
@@ -64,6 +71,20 @@ export default function FeedV2Page() {
   useEffect(() => {
     pollsRef.current = polls;
   }, [polls]);
+  
+  // Control del skeleton loading
+  useEffect(() => {
+    // Iniciar timer para ocultar skeleton después de carga inicial
+    skeletonTimerRef.current = setTimeout(() => {
+      setShowSkeleton(false);
+    }, SHOW_SKELETON_UNTIL_MS);
+    
+    return () => {
+      if (skeletonTimerRef.current) {
+        clearTimeout(skeletonTimerRef.current);
+      }
+    };
+  }, []);
 
   // ── Prefetch para carga INSTANTÁNEA al hacer scroll ───────────────────────
   // Estrategia (combinación barata + agresiva):
@@ -129,6 +150,14 @@ export default function FeedV2Page() {
         // Prefetch inmediato del contenido inicial (póster + vídeos delante)
         pollsRef.current = vsOnly;
         prefetchAround(0);
+        
+        // Ocultar skeleton cuando hay datos
+        if (vsOnly.length > 0 && skeletonTimerRef.current) {
+          clearTimeout(skeletonTimerRef.current);
+          skeletonTimerRef.current = setTimeout(() => {
+            setShowSkeleton(false);
+          }, 100);
+        }
       } else if (vsOnly.length === 0) {
         setHasMore(false);
       } else {
@@ -296,6 +325,21 @@ export default function FeedV2Page() {
   // Cambio de slide activo → prefetch proactivo del contenido siguiente.
   const handleActiveIndexChange = useCallback((idx) => {
     prefetchAround(idx);
+    
+    // Cancelación agresiva de prefetches lejanos (TikTok-style)
+    // Cuando el usuario hace scroll, cancelamos TODO lo que esté a más de 2 slides
+    // para liberar bandwidth inmediatamente para el slide activo
+    try {
+      const aborted = feedMediaPrefetcher?.cancelDistantPolls?.(idx, 2);
+      if (aborted > 0) {
+        console.log(`🚫 Cancelled ${aborted} distant prefetches`);
+      }
+    } catch (_) {}
+    
+    // Liberar fast-scrolling tras un brief delay si no hay más swipes
+    try {
+      setFastScrolling(false);
+    } catch (_) {}
   }, [prefetchAround]);
 
   // ── renderSlide estable: solo depende de handlers estables + user ─────────
@@ -351,6 +395,11 @@ export default function FeedV2Page() {
   }, [muted]);
 
   // ── Estados de UI ──────────────────────────────────────────────────────────
+  // Mostrar skeleton durante la carga inicial (TikTok-style)
+  if (showSkeleton && isLoading) {
+    return <FeedSkeleton count={3} />;
+  }
+  
   if (isLoading) {
     return (
       <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-4" data-testid="feed-v2-loading">

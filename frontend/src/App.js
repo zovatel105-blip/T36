@@ -5,7 +5,6 @@ import ResponsiveLayout from './components/ResponsiveLayout';
 import FeedPage from './pages/FeedPage';
 
 // 🚀 LAZY LOAD: todas las páginas secundarias se cargan bajo demanda
-const FeedV2Page = lazy(() => import('./pages/FeedV2Page'));
 const ExplorePage = lazy(() => import('./pages/ExplorePage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
@@ -246,7 +245,6 @@ function AppContent() {
         {/* Redirect root to feed */}
         <Route path="/" element={<Navigate to="/feed" replace />} />
         <Route path="/feed" element={<FeedPage />} />
-        <Route path="/feed-v2" element={<FeedV2Page />} />
         <Route path="/explore" element={<ExplorePage />} />
 
         {/* Main pages */}

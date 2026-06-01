@@ -43,46 +43,69 @@ const TikTokStyleVideo = ({
   const videoUrl = pickPlayableVideoUrl(option);
   const posterUrl = pickVideoPosterUrl(option) || DEFAULT_THUMBNAIL;
   
-  // 🚀 PRELOAD AGRESIVO - Empezar a cargar el video INMEDIATAMENTE
+  // 🚀 PRELOAD ESTRATÉGICO - Exactamente como TikTok
+  // distanceFromActive = 0 → Video activo (reproducir YA)
+  // distanceFromActive = 1 → Precargar primeros 500KB (1s de video)
+  // distanceFromActive = 2 → Solo thumbnail (<50KB)
+  // distanceFromActive > 2 → Nada (esperar a que el usuario haga scroll)
   useEffect(() => {
-    if (!videoUrl || distanceFromActive > 3) return;
+    if (!videoUrl) return;
     
-    // Crear elemento de video invisible para precargar
-    const preloadVideo = document.createElement('video');
-    preloadVideo.preload = 'auto';
-    preloadVideo.src = videoUrl;
-    preloadVideo.muted = true;
-    preloadVideo.playsInline = true;
-    preloadVideo.style.display = 'none';
+    const strategy = distanceFromActive;
     
-    // Escuchar eventos
-    const onCanPlay = () => {
-      setVideoReady(true);
-      document.body.removeChild(preloadVideo);
-    };
-    
-    const onError = () => {
-      setError(true);
-      if (preloadVideo.parentNode) {
-        document.body.removeChild(preloadVideo);
-      }
-    };
-    
-    preloadVideo.addEventListener('canplay', onCanPlay, { once: true });
-    preloadVideo.addEventListener('error', onError, { once: true });
-    
-    // Agregar al DOM para que empiece a cargar
-    document.body.appendChild(preloadVideo);
-    preloadVideo.load();
-    
-    // Cleanup
-    return () => {
-      preloadVideo.removeEventListener('canplay', onCanPlay);
-      preloadVideo.removeEventListener('error', onError);
-      if (preloadVideo.parentNode) {
-        document.body.removeChild(preloadVideo);
-      }
-    };
+    if (strategy === 0) {
+      // 🎬 ACTIVO - Reproducir inmediatamente
+      const preloadVideo = document.createElement('video');
+      preloadVideo.preload = 'auto';
+      preloadVideo.src = videoUrl;
+      preloadVideo.muted = true;
+      preloadVideo.playsInline = true;
+      preloadVideo.style.display = 'none';
+      
+      const onCanPlay = () => {
+        setVideoReady(true);
+        if (preloadVideo.parentNode) document.body.removeChild(preloadVideo);
+      };
+      
+      preloadVideo.addEventListener('canplay', onCanPlay, { once: true });
+      document.body.appendChild(preloadVideo);
+      preloadVideo.load();
+      
+      return () => {
+        preloadVideo.removeEventListener('canplay', onCanPlay);
+        if (preloadVideo.parentNode) document.body.removeChild(preloadVideo);
+      };
+      
+    } else if (strategy === 1) {
+      // 📥 SIGUIENTE - Precargar solo metadata + primer segmento (500KB)
+      const preloadVideo = document.createElement('video');
+      preloadVideo.preload = 'metadata';
+      preloadVideo.src = videoUrl;
+      preloadVideo.muted = true;
+      preloadVideo.style.display = 'none';
+      
+      // Request solo el primer segmento (Range request)
+      preloadVideo.setAttribute('data-range', 'bytes=0-524288'); // 512KB
+      
+      const onLoadedMetadata = () => {
+        setThumbnailLoaded(true);
+        if (preloadVideo.parentNode) document.body.removeChild(preloadVideo);
+      };
+      
+      preloadVideo.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+      document.body.appendChild(preloadVideo);
+      preloadVideo.load();
+      
+      return () => {
+        preloadVideo.removeEventListener('loadedmetadata', onLoadedMetadata);
+        if (preloadVideo.parentNode) document.body.removeChild(preloadVideo);
+      };
+      
+    } else if (strategy === 2) {
+      // 🖼️ SOLO THUMBNAIL - No precargar video, solo imagen
+      setThumbnailLoaded(true);
+    }
+    // strategy > 2 → No hacer nada (ahorrar bandwidth)
   }, [videoUrl, distanceFromActive]);
   
   // 🎬 PLAY/PAUSE basado en isActive

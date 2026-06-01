@@ -246,64 +246,11 @@ const TikTokPollCardInner = ({
     };
   }, []);
   
-  // 👁️ INTERSECTION OBSERVER para autoplay/pause basado en visibilidad REAL
-  // TikTok Web usa visibilidad en viewport, no solo índice activo.
-  // Esto detecta cuándo el video está realmente visible (>60%) y hace play,
-  // o cuándo está parcialmente oculto (<30%) y hace pause.
-  const containerRef = useRef(null);
-  const videoObserverRef = useRef(null);
-  
-  useEffect(() => {
-    if (!isActive || !isVisible || distanceFromActive !== 0) {
-      // Solo observar el slot activo y visible
-      return;
-    }
-    
-    // Crear Intersection Observer con thresholds múltiples
-    videoObserverRef.current = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          const video = entry.target;
-          const ratio = entry.intersectionRatio;
-          
-          // Play si >60% visible y tiene buffer suficiente
-          if (ratio > 0.6 && video.paused && video.readyState >= 2) {
-            video.play().catch(() => {
-              // Autoplay policy puede bloquear, ignorar
-            });
-          } 
-          // Pause si <30% visible para liberar decoder
-          else if (ratio < 0.3 && !video.paused) {
-            video.pause();
-          }
-        });
-      },
-      {
-        threshold: [0, 0.25, 0.5, 0.6, 0.75, 1], // Múltiples thresholds
-        root: containerRef.current?.parentElement || null,
-        rootMargin: '0px',
-      }
-    );
-    
-    // Observar todos los videos del card después de un breve delay
-    const observeTimer = setTimeout(() => {
-      if (containerRef.current) {
-        const videos = containerRef.current.querySelectorAll('video');
-        videos.forEach(v => {
-          if (videoObserverRef.current) {
-            videoObserverRef.current.observe(v);
-          }
-        });
-      }
-    }, 100);
-    
-    return () => {
-      clearTimeout(observeTimer);
-      if (videoObserverRef.current) {
-        videoObserverRef.current.disconnect();
-      }
-    };
-  }, [isActive, isVisible, distanceFromActive]);
+  // 🚀 OPTIMIZACIÓN: El IntersectionObserver ha sido eliminado.
+  // TikTok Web NO usa IntersectionObserver para autoplay/pause.
+  // En su lugar, usa la prop `isActive` para determinar si el video
+  // debe reproducirse o pausarse. Esto evita el overhead del observer
+  // y los re-renders que causa al detectar visibilidad.
   
   const getDisplayedTotalVotes = (p) => {
     const override = vsTotalsOverride[p?.id];
@@ -2480,8 +2427,20 @@ const TikTokScrollView = ({
     const el = tapeRef.current;
     if (!el) return;
     // translate3d para forzar layer GPU. Sin transition (drag activo).
-    el.style.transition = 'none';
-    el.style.transform = `translate3d(0, calc(-100dvh + ${offsetDvh}dvh + ${pullPx}px), 0)`;
+    // 🚀 OPTIMIZACIÓN: Usar requestAnimationFrame para batch updates y
+    // evitar layout thrashing durante el swipe.
+    const updateTransform = () => {
+      el.style.transition = 'none';
+      el.style.transform = `translate3d(0, calc(-100dvh + ${offsetDvh}dvh + ${pullPx}px), 0)`;
+    };
+    
+    // Usar rAF para asegurar que el transform se aplica en el siguiente
+    // frame de composición, evitando que el browser calcule layout sync.
+    if (typeof window !== 'undefined' && window.requestAnimationFrame) {
+      window.requestAnimationFrame(updateTransform);
+    } else {
+      updateTransform();
+    }
   }, []);
 
   const handleTapePointerMove = useCallback((e) => {

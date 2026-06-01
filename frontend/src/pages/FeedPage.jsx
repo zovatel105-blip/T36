@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation, useSearchParams } from 'react-router-dom';
 import TikTokScrollView from '../components/TikTokScrollView';
+import FeedSkeleton from '../components/FeedSkeleton';
 import PollCard from '../components/PollCard';
 import CommentsModal from '../components/CommentsModal';
 import ShareModal from '../components/ShareModal';
@@ -1083,23 +1084,31 @@ const FeedPage = () => {
         {/* Stories overlay - REMOVED (Stories feature disabled) */}
         
         {/* 🚀 ALWAYS USE OPTIMIZED TikTokScrollView - No toggle needed */}
-        <TikTokScrollView
-          polls={polls}
-          onVote={handleVote}
-          onLike={handleLike}
-          onShare={handleShare}
-          onComment={handleComment}
-          onSave={handleSave}
-          onExitTikTok={handleExitTikTok}
-          onCreatePoll={handleCreatePoll}
-          onLoadMore={loadMorePolls}
-          isLoadingMore={isLoadingMore}
-          hasMoreContent={hasMoreContent}
-          showLogo={false}
-          initialIndex={initialIndex}
-          onActiveIndexChange={handleActiveIndexChange}
-          onRefresh={handleRefresh}
-        />
+        <>
+          {/* Skeleton loading instantáneo - Aparece en 0ms */}
+          {polls.length === 0 && <FeedSkeleton count={6} />}
+          
+          {/* Contenido real - Reemplaza skeletons gradualmente */}
+          {polls.length > 0 && (
+            <TikTokScrollView
+              polls={polls}
+              onVote={handleVote}
+              onLike={handleLike}
+              onShare={handleShare}
+              onComment={handleComment}
+              onSave={handleSave}
+              onExitTikTok={handleExitTikTok}
+              onCreatePoll={handleCreatePoll}
+              onLoadMore={loadMorePolls}
+              isLoadingMore={isLoadingMore}
+              hasMoreContent={hasMoreContent}
+              showLogo={false}
+              initialIndex={initialIndex}
+              onActiveIndexChange={handleActiveIndexChange}
+              onRefresh={handleRefresh}
+            />
+          )}
+        </>
       </>
     );
   }

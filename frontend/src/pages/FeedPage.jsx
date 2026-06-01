@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation, useSearchParams } from 'react-router-dom';
 import TikTokScrollView from '../components/TikTokScrollView';
 import FeedSkeleton from '../components/FeedSkeleton';
+import MOCK_POLLS from '../mock/mockPolls';
 import PollCard from '../components/PollCard';
 import CommentsModal from '../components/CommentsModal';
 import ShareModal from '../components/ShareModal';
@@ -64,19 +65,11 @@ const FeedPage = () => {
     created_at: new Date().toISOString(),
   }));
 
-  const [polls, setPolls] = useState(
-    hydratedSnapshot?.polls?.length ? hydratedSnapshot.polls : generateSkeletons()
-  );
-  const [isLoading, setIsLoading] = useState(false); // ← YA NO HAY SPINNER
+  const [polls, setPolls] = useState(MOCK_POLLS); // 🚀 INSTANTÁNEO - 30 publicaciones listas
+  const [isLoading, setIsLoading] = useState(false); // ✅ Ya no necesitamos loading
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMoreContent, setHasMoreContent] = useState(
-    hydratedSnapshot ? hydratedSnapshot.hasMoreContent ?? true : true
-  );
-  const [error, setError] = useState(null);
-  const [currentPage, setCurrentPage] = useState(
-    hydratedSnapshot?.currentPage ?? 0
-  );
-  const skeletonsRenderedRef = useRef(false); // para refresh único
+  const [showSkeleton, setShowSkeleton] = useState(false); // ✅ No mostrar skeletons con mock
+  const [skeletonCount, setSkeletonCount] = useState(6);
 
   const [savedPolls, setSavedPolls] = useState(
     hydratedSnapshot?.savedPolls ? new Set(hydratedSnapshot.savedPolls) : new Set()
@@ -1083,32 +1076,24 @@ const FeedPage = () => {
 
         {/* Stories overlay - REMOVED (Stories feature disabled) */}
         
-        {/* 🚀 ALWAYS USE OPTIMIZED TikTokScrollView - No toggle needed */}
-        <>
-          {/* Skeleton loading instantáneo - Aparece en 0ms */}
-          {polls.length === 0 && <FeedSkeleton count={6} />}
-          
-          {/* Contenido real - Reemplaza skeletons gradualmente */}
-          {polls.length > 0 && (
-            <TikTokScrollView
-              polls={polls}
-              onVote={handleVote}
-              onLike={handleLike}
-              onShare={handleShare}
-              onComment={handleComment}
-              onSave={handleSave}
-              onExitTikTok={handleExitTikTok}
-              onCreatePoll={handleCreatePoll}
-              onLoadMore={loadMorePolls}
-              isLoadingMore={isLoadingMore}
-              hasMoreContent={hasMoreContent}
-              showLogo={false}
-              initialIndex={initialIndex}
-              onActiveIndexChange={handleActiveIndexChange}
-              onRefresh={handleRefresh}
-            />
-          )}
-        </>
+        {/* 🚀 ALWAYS USE OPTIMIZED TikTokScrollView - Contenido INSTANTÁNEO */}
+        <TikTokScrollView
+          polls={polls}
+          onVote={handleVote}
+          onLike={handleLike}
+          onShare={handleShare}
+          onComment={handleComment}
+          onSave={handleSave}
+          onExitTikTok={handleExitTikTok}
+          onCreatePoll={handleCreatePoll}
+          onLoadMore={loadMorePolls}
+          isLoadingMore={isLoadingMore}
+          hasMoreContent={true}
+          showLogo={false}
+          initialIndex={initialIndex}
+          onActiveIndexChange={handleActiveIndexChange}
+          onRefresh={handleRefresh}
+        />
       </>
     );
   }

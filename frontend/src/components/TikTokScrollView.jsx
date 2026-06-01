@@ -34,6 +34,7 @@ import realMusicService from '../services/realMusicService';
 import LayoutRenderer from './layouts/LayoutRenderer';
 import DoubleTapVoteAnimation from './DoubleTapVoteAnimation';
 import PollOptionMedia from './common/PollOptionMedia';
+import TikTokStyleVideo from './common/TikTokStyleVideo';
 import feedMenuService from '../services/feedMenuService';
 import storyService from '../services/storyService';
 import { useNavPreference } from '../hooks/useNavPreference';
@@ -1296,19 +1297,15 @@ const TikTokPollCardInner = ({
                               onDoubleTap={() => !hasUserVoted && handleVote(option.id)}
                               disabled={hasUserVoted}
                             >
-                            {/* Media del participante (offline-first cacheable) */}
-                            <PollOptionMedia
+                            {/* Media del participante (offline-first cacheable) - TikTok-style instant load */}
+                            <TikTokStyleVideo
                               option={option}
                               className="w-full h-full"
+                              isActive={vsAwareDistance === 0}
                               distanceFromActive={vsAwareDistance}
-                              layout={isVSPoll ? 'vs' : undefined}
-                              postId={poll?.id}
-                              videoProps={{
-                                autoPlay: true,
-                                loop: true,
-                                muted: true,
-                                playsInline: true,
-                              }}
+                              muted={true}
+                              loop={true}
+                              preload={vsAwareDistance <= 2}
                             />
                             
                             {/* Mentioned Users */}
@@ -1390,16 +1387,14 @@ const TikTokPollCardInner = ({
                               disabled={hasUserVoted}
                             >
                             {option.media?.type?.includes('video') || option.media?.url ? (
-                              <PollOptionMedia
+                              <TikTokStyleVideo
                                 option={option}
                                 className="w-full h-full"
+                                isActive={isActive}
                                 distanceFromActive={isActive ? 0 : 99}
-                                videoProps={{
-                                  autoPlay: true,
-                                  loop: true,
-                                  muted: true,
-                                  playsInline: true,
-                                }}
+                                muted={true}
+                                loop={true}
+                                preload={isActive}
                               />
                             ) : (
                               <div className="w-full h-full bg-gradient-to-br from-purple-900 to-pink-900" />

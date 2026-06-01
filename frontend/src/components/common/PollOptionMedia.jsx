@@ -215,6 +215,39 @@ const PollOptionMedia = ({
   const [hasFirstFrame, setHasFirstFrame] = useState(false);
   const [videoStatus, setVideoStatus] = useState('loading');
   const [imgStatus, setImgStatus] = useState('loading');
+  
+  // 🚀 CARGA INSTANTÁNEA - Precargar video cuando distance <= 2
+  // TikTok-style: empezar a descargar el video ANTES de que sea visible
+  useEffect(() => {
+    if (!isVideo || !videoSrc) return;
+    if (distanceFromActive > 2) return; // Solo precargar los cercanos
+    
+    const preloadVideo = async () => {
+      try {
+        // Crear elemento de video invisible para precargar
+        const preload = document.createElement('video');
+        preload.preload = 'auto';
+        preload.src = videoSrc;
+        preload.muted = true;
+        preload.playsInline = true;
+        
+        // Solo precargar metadata inicialmente (rápido, ~50KB)
+        preload.load();
+        
+        // Escuchar cuando tenga metadata suficiente
+        const onLoaded = () => {
+          setVideoStatus('ready');
+          preload.removeEventListener('loadedmetadata', onLoaded);
+        };
+        
+        preload.addEventListener('loadedmetadata', onLoaded);
+      } catch (err) {
+        console.warn('Preload failed:', err);
+      }
+    };
+    
+    preloadVideo();
+  }, [isVideo, videoSrc, distanceFromActive]);
 
   // Reset cuando cambian las URLs
   useEffect(() => {
@@ -574,6 +607,14 @@ const PollOptionMedia = ({
           )}
           style={{ ...style, contain: 'strict', contentVisibility: distanceFromActive > 2 ? 'auto' : 'visible' }}
         >
+          {/* 🦴 PLACEHOLDER mientras carga - Gradiente animado */}
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-900/20 via-pink-900/20 to-blue-900/20 animate-pulse" />
+          
+          {/* Icono de carga */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-16 h-16 border-4 border-white/20 border-t-white/60 rounded-full animate-spin" />
+          </div>
+          
           {posterSrc && (
             <img
               src={posterSrc}
@@ -582,7 +623,7 @@ const PollOptionMedia = ({
               fetchpriority="low"
               loading={distanceFromActive <= 2 ? 'eager' : 'lazy'}
               decoding="async"
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover opacity-50"
               style={{ transform: 'translateZ(0)' }}
               onError={(e) => { e.currentTarget.style.display = 'none'; }}
             />
